@@ -1,0 +1,11 @@
+{
+  "method": "GET",
+  "url": "https://seangoedecke.com/good-system-design/",
+  "status": 301,
+  "statusText": "Moved Permanently",
+  "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "location": "https://www.seangoedecke.com/good-system-design/"
+  },
+  "bodyFile": "http/seangoedecke.com-good-system-design-38074d8a42f72367.txt"
+}

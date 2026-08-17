@@ -1,0 +1,11 @@
+{
+  "method": "GET",
+  "url": "https://www.seangoedecke.com/good-system-design/",
+  "status": 200,
+  "statusText": "OK",
+  "headers": {
+    "content-type": "text/html; charset=UTF-8",
+    "etag": "\"6958b61b7c7c52bc6d195bd589b50617-ssl-df\""
+  },
+  "bodyFile": "http/www.seangoedecke.com-good-system-design-f0bf32295b110cf2.html"
+}

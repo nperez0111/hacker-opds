@@ -1,0 +1,94 @@
+# Deployment stack for hacker-opds.
+#
+# This is what Portainer redeploys when the GitHub Actions workflow hits the
+# webhook: it pulls the newly published image for this tag and recreates the
+# container. Everything that must survive that recreation lives in the named
+# volume, so the compose file itself is the whole deployment contract.
+#
+# The archive is expensive to rebuild: articles are scraped once and comment
+# trees are fetched from HN at one request every two seconds, so a lost volume
+# means days of refetching under a rate limit that cannot be hurried. Retention
+# only keeps 90 days, and anything older than that is gone for good, because
+# Algolia's ranking of a day cannot be reconstructed after the fact.
+
+services:
+  hacker-opds:
+    image: ghcr.io/nperez0111/hacker-opds:main
+    container_name: hacker-opds
+    restart: unless-stopped
+
+    ports:
+      # Left side is the host port; change it, not the right side. The right
+      # side must match PORT below, which the healthcheck also reads.
+      - "8080:3000"
+
+    volumes:
+      # Named, not a bind mount. A bind mount would put a SQLite database on
+      # whatever filesystem the host offers, and SQLite's locking is only
+      # correct on a local one. It also makes the "did Portainer just orphan my
+      # archive" question answerable with `docker volume ls`.
+      - hacker-opds-data:/data
+
+    environment:
+      # Editions are cut per calendar day in this zone, and nitro's scheduled
+      # tasks evaluate their cron expressions against process local time, so
+      # this single value controls both when a day closes and when the nightly
+      # retention sweep runs. Changing it after the fact will not re-cut
+      # existing editions.
+      TZ: Europe/Amsterdam
+      EDITION_TZ: Europe/Amsterdam
+
+      PORT: "3000"
+      DATA_DIR: /data
+
+      # Leave PUBLIC_BASE_URL unset behind a reverse proxy that forwards the
+      # Host header: the OPDS and RSS feeds then derive their absolute URLs
+      # from the request, which is the only way one image can serve a hostname
+      # it was not built with. Set it only if the proxy rewrites Host, in which
+      # case every link in every feed would otherwise point at the wrong origin
+      # and e-reader downloads would fail with a connection error.
+      # PUBLIC_BASE_URL: https://hn.example.com
+
+      LOG_LEVEL: info
+      LOG_PRETTY: "false"
+
+      # Uncomment to override; defaults live in src/defaults.ts.
+      # EDITION_LAG_HOURS: "6"
+      # RETENTION_DAYS: "90"
+      # HN_REQUEST_DELAY_MS: "2000"
+
+    # The image already declares a HEALTHCHECK; it is restated here only so
+    # that a Portainer stack edit cannot silently drop it.
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - >-
+          const r = await fetch("http://127.0.0.1:" + (process.env.PORT || 3000) + "/healthz");
+          const b = await r.json();
+          process.exit(b.status === "ok" ? 0 : 1)
+      interval: 60s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+    # Comment trees are held in memory while a book is assembled, and a digest
+    # covers thirty stories at once, so the ceiling is generous. Without one, a
+    # pathological edition can take the host down instead of one container.
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+    logging:
+      driver: json-file
+      options:
+        # Logs are one NDJSON line per request. Uncapped, they outgrow the
+        # archive they describe.
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  hacker-opds-data:
+    name: hacker-opds-data

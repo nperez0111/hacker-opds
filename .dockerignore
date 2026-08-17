@@ -1,0 +1,29 @@
+# The build context is copied wholesale in the `build` stage, so anything left
+# here is bytes shipped to the daemon (and, on a multi-platform build, shipped
+# once per architecture). Keep this in step with .gitignore.
+
+.git
+.github
+.gitignore
+
+node_modules
+.output
+.nitro
+dist
+
+# The live database and every generated blob. ~30 MB of SQLite plus hundreds of
+# EPUBs and images; a container must start from an empty DATA_DIR anyway.
+.data
+
+.env
+.env.local
+*.log
+
+.DS_Store
+
+# Not reachable from any route, and tests/ pulls in the fixture cache.
+tests
+Dockerfile
+.dockerignore
+docker-compose.yml
+README.md

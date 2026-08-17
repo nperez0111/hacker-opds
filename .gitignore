@@ -1,0 +1,17 @@
+node_modules/
+
+# Nitro / Vite build output
+.output/
+.nitro/
+dist/
+
+# Runtime data volume: SQLite database + generated EPUB/image/cover blobs.
+# Everything here is rebuildable from Algolia, so it must never be committed.
+.data/
+
+# Local env overrides (Nitro only loads these in dev)
+.env
+.env.local
+
+.DS_Store
+*.log
