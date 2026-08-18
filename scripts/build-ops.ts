@@ -21,11 +21,13 @@
  * markdown conversion. Nesting under `.output/server/` puts the traced
  * directory one level up, which is the first place the walk looks.
  *
- * Not everything in scripts/ belongs here. build-fonts is a source-generation
- * step, and opds-probe is deliberately left out despite being the obvious
- * debugging tool: its headline check is that no catalogue link points off the
- * crawl origin, so pointed at 127.0.0.1 from inside the container it would flag
- * every correctly-formed link on any deployment that sets PUBLIC_BASE_URL.
+ * Not everything in scripts/ belongs here. build-fonts and build-icon are
+ * source-generation steps - their output is checked in as TypeScript and a
+ * container has no reason to rerun them - and opds-probe is deliberately left
+ * out despite being the obvious debugging tool: its headline check is that no
+ * catalogue link points off the crawl origin, so pointed at 127.0.0.1 from
+ * inside the container it would flag every correctly-formed link on any
+ * deployment that sets PUBLIC_BASE_URL.
  * It is a tool to run *at* the deployment, not in it.
  */
 import { rm } from "node:fs/promises";

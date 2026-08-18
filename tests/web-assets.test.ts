@@ -21,13 +21,19 @@ import {
   getWebAsset,
   webAssetNames,
 } from "~/web/assets";
-import { getFontAsset } from "~/web/fonts";
+import { fontAssetUrls } from "~/web/fonts";
+import { iconUrls } from "~/web/icons";
 import { APP_JS } from "~/web/sw";
 import { SITE_CSS } from "~/web/styles";
 
 /** The same eight-hex-character token the module derives its URLs from. */
 function token(value: string): string {
   return new Bun.CryptoHasher("sha256").update(value).digest("hex").slice(0, 8);
+}
+
+/** The registry key behind an `/assets/<name>?v=...` URL. */
+function assetNameOf(url: string): string {
+  return url.slice("/assets/".length).split("?")[0] as string;
 }
 
 describe("webAssetNames", () => {
@@ -46,12 +52,23 @@ describe("webAssetNames", () => {
       const asset = getWebAsset(name);
       expect(asset).not.toBeNull();
       expect(asset!.body.length).toBeGreaterThan(0);
-      // Binary bodies are the font faces and carry a font/* type. Everything
-      // else - including the generated fonts.css - is text and must declare its
-      // charset, or a browser guesses latin-1 and mangles the specimens.
-      expect(asset!.type).toContain(
-        typeof asset!.body === "string" ? "charset=utf-8" : "font/",
-      );
+      /*
+       * The invariant is about the body, not about a list of names. A text
+       * body must declare its charset or a browser guesses latin-1 and mangles
+       * the specimens; a binary body must declare a binary media type and must
+       * *not* declare a charset, because a charset on bytes is a claim that
+       * they are text and is exactly the header that makes a proxy feel
+       * entitled to transcode them.
+       *
+       * Stated this way it holds for the fonts, for the icon PNGs and for the
+       * ICO, and it will hold for whatever binary asset comes next.
+       */
+      if (typeof asset!.body === "string") {
+        expect(asset!.type).toContain("charset=utf-8");
+      } else {
+        expect(asset!.type).toMatch(/^(?:font|image)\//);
+        expect(asset!.type).not.toContain("charset");
+      }
       expect(asset!.etag).toMatch(/^"[0-9a-f]{8}"$/);
     }
   });
@@ -130,17 +147,24 @@ describe("cache immutability", () => {
     expect(getWebAsset("manifest.webmanifest")!.immutable).toBe(false);
   });
 
-  test("exactly the unhashed URLs are the mutable ones", () => {
+  test("exactly the hashed URLs are the immutable ones", () => {
+    /*
+     * Both directions of the implication matter, which is why this compares
+     * two sets rather than checking one flag per asset. An immutable asset
+     * whose URL carries no hash is frozen in every reader's cache forever; a
+     * hashed URL pointing at a mutable asset makes every deploy refetch bytes
+     * that were already correct.
+     *
+     * The URL list is assembled from the modules that publish them rather than
+     * enumerated here, so a new asset joins this test by existing.
+     */
+    const hashed = new Set(
+      [CSS_URL, APP_JS_URL, ...fontAssetUrls(), ...iconUrls()].map((url) =>
+        assetNameOf(url),
+      ),
+    );
     for (const name of webAssetNames()) {
-      // Font files and fonts.css are content-addressed by the font registry, so
-      // they are immutable for the same reason site.css is - their URL changes
-      // when their bytes do.
-      if (getFontAsset(name)) {
-        expect(getWebAsset(name)!.immutable).toBe(true);
-        continue;
-      }
-      const hashed = [CSS_URL, APP_JS_URL].some((url) => url.startsWith(`/assets/${name}?`));
-      expect(getWebAsset(name)!.immutable).toBe(hashed);
+      expect(getWebAsset(name)!.immutable).toBe(hashed.has(name));
     }
   });
 });
@@ -169,8 +193,7 @@ describe("asset URLs", () => {
 
   test("every URL resolves back to a real asset", () => {
     for (const url of [CSS_URL, APP_JS_URL, SW_URL, MANIFEST_URL]) {
-      const name = url.slice("/assets/".length).split("?")[0] as string;
-      expect(getWebAsset(name)).not.toBeNull();
+      expect(getWebAsset(assetNameOf(url))).not.toBeNull();
     }
   });
 });
@@ -192,8 +215,7 @@ describe("PRECACHE_URLS", () => {
 
   test("every asset entry resolves to a registered asset", () => {
     for (const url of PRECACHE_URLS.filter((u) => u.startsWith("/assets/"))) {
-      const name = url.slice("/assets/".length).split("?")[0] as string;
-      expect(getWebAsset(name)).not.toBeNull();
+      expect(getWebAsset(assetNameOf(url))).not.toBeNull();
     }
   });
 

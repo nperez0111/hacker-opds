@@ -21,11 +21,15 @@ import type { StoryRow } from "~/core/edition";
 import {
   APP_JS_URL,
   CSS_URL,
+  FAVICON_ICO_NAME,
+  FAVICON_PATH,
   PRECACHE_URLS,
   getWebAsset,
 } from "~/web/assets";
+import { iconUrls } from "~/web/icons";
 
 import assetRoute from "../server/routes/assets/[file]";
+import faviconRoute from "../server/routes/favicon.ico";
 import themeRoute from "../server/routes/theme";
 import offlineRoute from "../server/routes/offline";
 import indexRoute from "../server/routes/index";
@@ -287,6 +291,72 @@ describe("GET /assets/:file", () => {
       const res = await call(assetRoute, event(url, { params: { file: name } }));
       expect(res.status).toBe(200);
     }
+  });
+
+  test("serves every icon URL the pages and the manifest reference", async () => {
+    for (const url of iconUrls()) {
+      const name = url.slice("/assets/".length).split("?")[0] as string;
+      const res = await call(assetRoute, event(url, { params: { file: name } }));
+      expect(res.status).toBe(200);
+      // Byte-for-byte, which is the assertion that would fail if a binary body
+      // ever went through a JS string on its way into the Response.
+      const body = new Uint8Array(await res.arrayBuffer());
+      const asset = getWebAsset(name)!;
+      expect(body.length).toBe(asset.body.length);
+    }
+  });
+});
+
+describe("GET /favicon.ico", () => {
+  test("serves the icon bytes rather than redirecting to the hashed URL", async () => {
+    // A redirect costs a second round trip on a radio, and favicon fetchers
+    // are the least conformant HTTP clients in service - several do not follow
+    // one at all.
+    const res = await call(faviconRoute, event(FAVICON_PATH));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/x-icon");
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  test("serves exactly the registered asset", async () => {
+    const asset = getWebAsset(FAVICON_ICO_NAME)!;
+    const res = await call(faviconRoute, event(FAVICON_PATH));
+    const body = new Uint8Array(await res.arrayBuffer());
+    expect(body).toEqual(asset.body as Uint8Array);
+    expect(res.headers.get("etag")).toBe(asset.etag);
+  });
+
+  test("is an ICO, checked at the magic bytes rather than by its name", async () => {
+    const res = await call(faviconRoute, event(FAVICON_PATH));
+    const dv = new DataView(await res.arrayBuffer());
+    expect(dv.getUint16(0, true)).toBe(0);
+    expect(dv.getUint16(2, true)).toBe(1);
+    expect(dv.getUint16(4, true)).toBe(3);
+  });
+
+  test("revalidates rather than freezing, because the URL carries no hash", async () => {
+    const res = await call(faviconRoute, event(FAVICON_PATH));
+    expect(res.headers.get("cache-control")).toBe("public, max-age=86400, must-revalidate");
+  });
+
+  test("answers a matching if-none-match with 304 and no body", async () => {
+    const etag = getWebAsset(FAVICON_ICO_NAME)!.etag;
+    const res = await call(
+      faviconRoute,
+      event(FAVICON_PATH, { headers: { "if-none-match": etag } }),
+    );
+    expect(res.status).toBe(304);
+    expect(res.headers.get("etag")).toBe(etag);
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+  });
+
+  test("sends the body when the etag is stale", async () => {
+    const res = await call(
+      faviconRoute,
+      event(FAVICON_PATH, { headers: { "if-none-match": '"stale123"' } }),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
   });
 });
 

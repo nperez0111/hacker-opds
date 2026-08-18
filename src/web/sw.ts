@@ -15,6 +15,7 @@
  *  2. E-reader browsers are old. Shipping exactly the syntax that is written
  *     here, with no transpiler in between, means what is tested is what runs.
  */
+import { manifestIcons } from "~/web/icons";
 
 /**
  * Caching strategy, and why it is split.
@@ -85,6 +86,13 @@ function isAsset(path) {
  * losing signal is a browser error page instead of the results they just had.
  * It is an idempotent GET returning HTML, which is the same category as / and
  * /archive, not the category /theme is in.
+ *
+ * /favicon.ico is here for the /robots.txt reason. It is a root-level
+ * non-HTML resource, and a browser that navigates straight to it sends
+ * Accept: text/html - which would file an icon in the page cache and, offline,
+ * answer an icon request with the /offline document. The copy that matters is
+ * cached anyway: every page links the icon at a hashed /assets/ URL, and those
+ * are cache-first.
  */
 function isBypassed(path) {
   return (
@@ -94,7 +102,8 @@ function isBypassed(path) {
     path === "/healthz" ||
     path === "/theme" ||
     path === "/settings" ||
-    path === "/robots.txt"
+    path === "/robots.txt" ||
+    path === "/favicon.ico"
   );
 }
 
@@ -555,6 +564,13 @@ export function webManifest(): string {
       display: "standalone",
       background_color: "#ffffff",
       theme_color: "#000000",
+      /*
+       * Hashed URLs, from the icon registry rather than written out here. An
+       * installed app keeps whatever icon the manifest named at install time,
+       * so a literal path that stopped matching the bytes would be a wrong
+       * icon on someone's home screen until they reinstalled.
+       */
+      icons: manifestIcons(),
     },
     null,
     2,

@@ -257,7 +257,7 @@ it is the difference between a site owner emailing you and blocking you.
 bun run dev          # dev server, pretty logs, debug level
 bun run build        # production bundle into .output/
 bun run start        # run the built server
-bun test             # ~1080 tests, no network, no fixtures to record
+bun test             # ~1130 tests, no network, no fixtures to record
 bun run typecheck    # tsc --noEmit
 bun run probe        # crawl the OPDS catalogue and validate it end to end
 bun run ingest       # ingest an edition
@@ -265,7 +265,14 @@ bun run reindex      # rebuild the search index
 bun run reset        # inspect or delete derived data
 bun run health       # curl /healthz
 bun run fonts:build  # regenerate the subsetted web fonts
+bun run icon:build   # redraw the favicon and the app icons
 ```
+
+`fonts:build` and `icon:build` are source-generation steps, not part of `build`
+or `test`: they reach for the network and rewrite a checked-in TypeScript
+module, so a deploy needs neither. `icon:build` sets an "HN" ligature in Charis
+SIL Bold, extracts the glyph outlines, and emits the SVG, `favicon.ico` and the
+PNG rasters into `src/web/icon-files.ts`.
 
 `reset` reports by default and only deletes when told to:
 
@@ -386,7 +393,9 @@ Fonts are [Charis SIL](https://software.sil.org/charis/),
 [Literata](https://github.com/googlefonts/literata) and
 [Atkinson Hyperlegible](https://www.brailleinstitute.org/freefont), all under
 the SIL Open Font License — subsetted and self-hosted. See
-`src/web/fonts/NOTICE.md`.
+`src/web/fonts/NOTICE.md`. The site icon is an "HN" ligature set in Charis SIL
+Bold and reduced to outlines, so it carries the same licence and the same
+notice.
 
 ## License
 

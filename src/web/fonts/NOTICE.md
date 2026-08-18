@@ -57,6 +57,20 @@ long-form reading on low-resolution output in the first place.
 
 ---
 
+## Derived artwork
+
+The site icon (`src/web/icon-files.ts`, drawn by `scripts/build-icon.ts`) is an
+"HN" ligature built from the Charis SIL Bold outlines for `H` and `N`, moved so
+the two letters share a stem and emitted as SVG path data. It is a picture, not
+a font: it contains no font tables, exposes no glyph a text engine could set,
+and carries no family name. The OFL treats that as permitted use of the font
+rather than a modification of it - the licence's own FAQ is explicit that
+converting glyphs to outlines inside a document or a logo does not make the
+result Font Software, and the Reserved Font Name clause therefore does not bite.
+
+Attributed here anyway, because it is Charis SIL's drawing and SIL should be
+named for it.
+
 ## Not bundled
 
 **Bookerly** is offered in the settings modal as a `local()`-only option. It is

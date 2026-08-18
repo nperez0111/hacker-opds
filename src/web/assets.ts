@@ -8,6 +8,7 @@
  * src/epub/styles.ts.
  */
 import { type AssetBody, FONT_ASSETS } from "~/web/fonts";
+import { ICON_ASSETS } from "~/web/icons";
 import { APP_JS, serviceWorkerJs, webManifest } from "~/web/sw";
 import { SITE_CSS } from "~/web/styles";
 
@@ -86,6 +87,13 @@ const ASSETS: Record<string, WebAsset> = {
    * note on that list.
    */
   ...FONT_ASSETS,
+  /*
+   * The icon set: the SVG master, favicon.ico and the PNG rasters. Content
+   * hashed and immutable like the fonts, and out of PRECACHE for the same
+   * reason - see the note on `ICON_ASSETS`. `/favicon.ico` at the site root is
+   * served by its own route, which reads the very same bytes out of here.
+   */
+  ...ICON_ASSETS,
   "site.css": asset(SITE_CSS, "text/css; charset=utf-8", true),
   "app.js": asset(APP_JS, "text/javascript; charset=utf-8", true),
   /*
@@ -115,6 +123,20 @@ export const CSS_URL = `/assets/site.css?v=${CSS_TOKEN}`;
 export const APP_JS_URL = `/assets/app.js?v=${APP_TOKEN}`;
 export const SW_URL = "/assets/sw.js";
 export const MANIFEST_URL = "/assets/manifest.webmanifest";
+
+/*
+ * Icon URLs are re-exported rather than redefined, so a page and the manifest
+ * cannot end up pointing at different builds of the same drawing. They are
+ * declared in `~/web/icons` because `~/web/sw` needs them too and this module
+ * imports that one.
+ */
+export {
+  APPLE_TOUCH_ICON_URL,
+  FAVICON_ICO_NAME,
+  FAVICON_ICO_URL,
+  FAVICON_PATH,
+  ICON_SVG_URL,
+} from "~/web/icons";
 
 /** Exposed for tests, which assert the worker retires stale caches by name. */
 export const SERVICE_WORKER_VERSION = SW_VERSION;

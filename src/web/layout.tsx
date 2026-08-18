@@ -13,7 +13,14 @@
  * `<html>` tag, spreads the attributes from `pageAttrs`, and puts everything
  * else inside `Shell`, which renders `<head>` and `<body>` as a fragment.
  */
-import { APP_JS_URL, CSS_URL, MANIFEST_URL } from "~/web/assets";
+import {
+  APPLE_TOUCH_ICON_URL,
+  APP_JS_URL,
+  CSS_URL,
+  FAVICON_ICO_URL,
+  ICON_SVG_URL,
+  MANIFEST_URL,
+} from "~/web/assets";
 import { FONT_CSS_URL, type FontId } from "~/web/fonts";
 import { SETTINGS_ID, settingsPanelHtml } from "~/web/settings";
 import type { Theme } from "~/web/theme";
@@ -29,6 +36,17 @@ import type { Theme } from "~/web/theme";
 type Renderable = JSX.Element | string | number | boolean | null | undefined;
 
 export const SITE_NAME = "Hacker News Daily";
+
+/**
+ * Where the source lives.
+ *
+ * Declared here rather than inlined at the one call site because it is the
+ * project's own identity, not a piece of footer markup: the same URL belongs in
+ * anything that has to say who made this - a future `<link rel="author">`, an
+ * OPDS publisher field, an about page. One constant now is cheaper than finding
+ * three stale copies later.
+ */
+export const SOURCE_URL = "https://github.com/nperez0111/hacker-opds";
 
 /**
  * Nav destinations.
@@ -201,6 +219,42 @@ export function Shell(props: ShellProps) {
          * a server-resolved theme we already know which one it is.
          */}
         <meta name="color-scheme" content={theme === "auto" ? "light dark" : theme} />
+        {/*
+         * theme-color paints the browser's own chrome - Chrome's address bar on
+         * Android, the status bar of an installed app - and until now the
+         * manifest declared one and the pages did not, so a tab was framed in
+         * whatever the browser felt like while the installed app was framed in
+         * black. These are the page's actual background colours from
+         * src/web/styles.ts, not the manifest's `theme_color`.
+         *
+         * Two media-scoped tags for "auto" rather than one unscoped tag,
+         * because the resolution has to happen on the device: that is the whole
+         * meaning of "auto", and a server that guessed would be wrong for
+         * exactly the readers who asked not to be guessed at.
+         */}
+        {theme === "auto" ? (
+          <>
+            <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+            <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000" />
+          </>
+        ) : (
+          <meta name="theme-color" content={theme === "dark" ? "#000000" : "#ffffff"} />
+        )}
+        {/*
+         * Three icons for three kinds of consumer, in the order a browser
+         * should prefer them. The SVG scales and inverts itself for dark
+         * chrome; the ICO carries 16/32/48 rasters drawn for their pixel grid,
+         * and is what anything predating SVG favicons takes; the
+         * apple-touch-icon is iOS's, which reads no manifest and ignores alpha.
+         *
+         * The ICO is linked at its hashed URL so it can be cached forever. The
+         * unhashed /favicon.ico exists as well, because browsers, feed readers
+         * and link unfurlers request it at the site root regardless of what any
+         * of this says - see server/routes/favicon.ico.ts.
+         */}
+        <link rel="icon" type="image/svg+xml" href={ICON_SVG_URL} />
+        <link rel="icon" type="image/x-icon" sizes="16x16 32x32 48x48" href={FAVICON_ICO_URL} />
+        <link rel="apple-touch-icon" sizes="180x180" href={APPLE_TOUCH_ICON_URL} />
         <link rel="stylesheet" href={CSS_URL} />
         {/*
          * Separate from the site stylesheet on purpose: this file is generated
@@ -286,6 +340,16 @@ export function Shell(props: ShellProps) {
               </li>
               <li>
                 <a href="https://news.ycombinator.com/">Hacker News</a>
+              </li>
+              {/*
+               * Last, and deliberately not in the nav. The masthead is for
+               * readers, who are here for the stories; the source link is for
+               * the much smaller number of people who want to know how the
+               * sausage is made, and the footer is where that convention has
+               * put it for twenty years.
+               */}
+              <li>
+                <a href={SOURCE_URL}>Source</a>
               </li>
             </ul>
           </footer>

@@ -13,6 +13,7 @@
     "test:integration": "RUN_INTEGRATION=1 bun test tests/integration",
     "probe": "bun run scripts/opds-probe.ts",
     "fonts:build": "bun run scripts/build-fonts.ts",
+    "icon:build": "bun run scripts/build-icon.ts",
     "ingest": "bun run scripts/ingest.ts",
     "reindex": "bun run scripts/reindex.ts",
     "reset": "bun run scripts/reset.ts",

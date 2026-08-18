@@ -15,9 +15,16 @@ import { describe, expect, test } from "bun:test";
 import type { CommentRow } from "~/core/comments";
 import type { EditionSummary, StoryRow } from "~/core/edition";
 import type { ArticleRecord } from "~/core/extract";
-import { APP_JS_URL, CSS_URL, MANIFEST_URL } from "~/web/assets";
+import {
+  APPLE_TOUCH_ICON_URL,
+  APP_JS_URL,
+  CSS_URL,
+  FAVICON_ICO_URL,
+  ICON_SVG_URL,
+  MANIFEST_URL,
+} from "~/web/assets";
 import { DEFAULT_FONT, FONT_CSS_URL, type FontId } from "~/web/fonts";
-import { SITE_NAME, Shell, isCurrentSection, pageAttrs } from "~/web/layout";
+import { SITE_NAME, SOURCE_URL, Shell, isCurrentSection, pageAttrs } from "~/web/layout";
 import type { Theme } from "~/web/theme";
 import {
   ArchiveView,
@@ -251,6 +258,34 @@ describe("Shell - document", () => {
     expect(html).toContain("profile=opds-catalog;kind=navigation");
     expect(html).toContain('href="/opds"');
   });
+
+  test("links the icon three ways, one per kind of consumer", async () => {
+    const html = await renderPage(<OfflineView />);
+    // The URLs are imported, never spelled out: a hashed path written into a
+    // test is a hashed path that keeps passing after the icon is redrawn.
+    expect(html).toContain(`<link rel="icon" type="image/svg+xml" href="${ICON_SVG_URL}">`);
+    expect(html).toContain(
+      `<link rel="icon" type="image/x-icon" sizes="16x16 32x32 48x48" href="${FAVICON_ICO_URL}">`,
+    );
+    expect(html).toContain(
+      `<link rel="apple-touch-icon" sizes="180x180" href="${APPLE_TOUCH_ICON_URL}">`,
+    );
+  });
+
+  test("prefers the SVG, by declaring it first", async () => {
+    // Browsers that understand more than one of these take the last one they
+    // can render, but several take the first; putting the scalable,
+    // self-inverting one at the top is the only ordering that is right for
+    // both readings.
+    const html = await renderPage(<OfflineView />);
+    expect(html.indexOf(ICON_SVG_URL)).toBeLessThan(html.indexOf(FAVICON_ICO_URL));
+  });
+
+  test("does not link the root /favicon.ico, which exists for clients that guess", async () => {
+    // Linking it would hand every browser an unhashed URL it has to revalidate
+    // on each visit, when the hashed one it can freeze is right there.
+    expect(await renderPage(<OfflineView />)).not.toContain('href="/favicon.ico"');
+  });
 });
 
 describe("Shell - theme", () => {
@@ -269,6 +304,31 @@ describe("Shell - theme", () => {
     expect(await renderPage(<OfflineView />, { theme: "auto" })).toContain(
       '<meta name="color-scheme" content="light dark">',
     );
+  });
+
+  test("paints browser chrome to match the resolved theme", async () => {
+    // The page's own background colours, from src/web/styles.ts. Not the
+    // manifest's theme_color, which is the installed app's title bar and is
+    // black in both themes on purpose.
+    expect(await renderPage(<OfflineView />, { theme: "dark" })).toContain(
+      '<meta name="theme-color" content="#000000">',
+    );
+    expect(await renderPage(<OfflineView />, { theme: "light" })).toContain(
+      '<meta name="theme-color" content="#ffffff">',
+    );
+  });
+
+  test("leaves theme-color to the device when the theme is auto", async () => {
+    // Two media-scoped tags rather than a server-side guess: "auto" means the
+    // reader asked the device to decide, and the server does not know.
+    const html = await renderPage(<OfflineView />, { theme: "auto" });
+    expect(html).toContain(
+      '<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">',
+    );
+    expect(html).toContain(
+      '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">',
+    );
+    expect(html.match(/name="theme-color"/g)).toHaveLength(2);
   });
 
   test("marks the current theme as selected in the settings panel", async () => {
@@ -374,6 +434,24 @@ describe("Shell - navigation", () => {
     expect(footer).toContain('href="/opds"');
     expect(footer).toContain('href="/archive"');
     expect(footer).toContain("https://news.ycombinator.com/");
+  });
+
+  test("the footer links to the source", async () => {
+    const html = await renderPage(<OfflineView />);
+    const footer = html.slice(html.indexOf('<footer class="site-foot">'));
+    expect(footer).toContain(`<a href="${SOURCE_URL}">Source</a>`);
+  });
+
+  /*
+   * The masthead is capped at five entries for tap-target reasons (see the NAV
+   * comment in layout.tsx), so this asserts the source link stayed out of it.
+   * Without this the next person to "improve discoverability" silently spends
+   * the last slot.
+   */
+  test("the source link is not in the nav", async () => {
+    const html = await renderPage(<OfflineView />);
+    const nav = html.slice(html.indexOf("<nav"), html.indexOf("</nav>"));
+    expect(nav).not.toContain(SOURCE_URL);
   });
 });
 

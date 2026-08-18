@@ -162,9 +162,16 @@ describe("serviceWorkerJs - routing", () => {
     expect(isBypassed("/opds/editions")).toBe(true);
     expect(isBypassed("/healthz")).toBe(true);
     expect(isBypassed("/theme")).toBe(true);
+    // The root icon path, for the same reason /robots.txt is: navigating to it
+    // would otherwise file an icon in the page cache and answer it with the
+    // /offline document once the network went away.
+    expect(isBypassed("/favicon.ico")).toBe(true);
     expect(isBypassed("/")).toBe(false);
     expect(isBypassed("/story/1")).toBe(false);
     expect(isBypassed("/assets/site.css")).toBe(false);
+    // The hashed copy the pages link is *not* bypassed - it is what makes the
+    // icon available offline.
+    expect(isBypassed("/assets/favicon.ico")).toBe(false);
   });
 
   test("indexes go network-first, with a deadline", () => {
