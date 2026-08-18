@@ -1,8 +1,7 @@
 import { defineHandler } from "nitro/h3";
 import { searchStories } from "~/search/query";
-import { readFont } from "~/web/fonts";
 import { Shell, pageAttrs } from "~/web/layout";
-import { readTheme } from "~/web/theme";
+import { readPreferences } from "~/web/settings";
 import { SearchView } from "~/web/views";
 
 /**
@@ -19,8 +18,7 @@ import { SearchView } from "~/web/views";
  * free to cache it - see the note on `isBypassed` in ~/web/sw.
  */
 export default defineHandler((event) => {
-  const theme = readTheme(event);
-  const font = readFont(event);
+  const prefs = readPreferences(event);
 
   const params = event.url.searchParams;
   const q = params.get("q") ?? "";
@@ -31,11 +29,10 @@ export default defineHandler((event) => {
   });
 
   return (
-    <html {...pageAttrs({ theme, font, cacheControl: "no-cache" })}>
+    <html {...pageAttrs({ prefs, cacheControl: "no-cache" })}>
       <Shell
         title={results.query ? `Search: ${results.query}` : "Search"}
-        theme={theme}
-        font={font}
+        prefs={prefs}
         path="/search"
         description="Search the Hacker News stories held in this archive."
       >

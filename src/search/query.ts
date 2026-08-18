@@ -112,6 +112,15 @@ export interface SearchHit {
    * summary is a second copy of its own heading is worse than no summary.
    */
   snippet: string;
+  /**
+   * Words in the extracted article, or null when there is no article row.
+   *
+   * Null is common here in a way it is not on an edition page: search reaches
+   * back through the whole archive, including days whose extractions failed and
+   * were never retried, so the reading time is missing from a result row often
+   * enough that its absence has to be unremarkable rather than a defect.
+   */
+  word_count: number | null;
   /** bm25 relevance. Negative, and more negative is better. */
   score: number;
 }
@@ -137,10 +146,12 @@ const SELECT_HITS = `SELECT s.id           AS id,
           s.points       AS points,
           s.num_comments AS num_comments,
           s.created_at_i AS created_at_i,
+          a.word_count   AS word_count,
           snippet(search_fts, 1, '', '', char(8230), ?) AS snippet,
           bm25(search_fts, ?, ?) AS score
      FROM search_fts
      JOIN stories s ON s.id = search_fts.story_id
+     LEFT JOIN articles a ON a.story_id = s.id
     WHERE search_fts MATCH ?
     ORDER BY score, s.points DESC, s.id
     LIMIT ? OFFSET ?`;

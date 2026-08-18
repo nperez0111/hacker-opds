@@ -45,7 +45,15 @@ import {
   type FontId,
 } from "~/web/fonts";
 import { SETTINGS_CSS, SETTINGS_ID, settingsPanelHtml } from "~/web/settings";
-import { THEME_COOKIE } from "~/web/theme";
+import { THEME_COOKIE, type Theme } from "~/web/theme";
+import {
+  DEFAULT_LINE_SPACING,
+  DEFAULT_TEXT_SIZE,
+  LINE_SPACINGS,
+  TEXT_SIZES,
+  type LineSpacing,
+  type TextSize,
+} from "~/web/type";
 
 import settingsRoute from "../server/routes/settings";
 
@@ -707,8 +715,32 @@ describe("GET /settings", () => {
   });
 });
 
+/**
+ * The panel, with every preference defaulted so a test names only the one it
+ * is about. Four groups means four required values, and spelling all four out
+ * at every call site would bury the one that matters.
+ */
+function panel(opts: {
+  path: string;
+  font?: FontId;
+  theme?: Theme;
+  size?: TextSize;
+  spacing?: LineSpacing;
+}): string {
+  return settingsPanelHtml({
+    path: opts.path,
+    font: opts.font ?? DEFAULT_FONT,
+    theme: opts.theme ?? "auto",
+    size: opts.size ?? DEFAULT_TEXT_SIZE,
+    spacing: opts.spacing ?? DEFAULT_LINE_SPACING,
+  });
+}
+
+/** Every option group, as the panel orders them. */
+const GROUP_COUNT = FONTS.length + TEXT_SIZES.length + LINE_SPACINGS.length + 3;
+
 describe("the settings panel markup", () => {
-  const html = settingsPanelHtml({ path: "/story/44921137", font: "literata", theme: "dark" });
+  const html = panel({ path: "/story/44921137", font: "literata", theme: "dark" });
 
   test("is a section carrying the fragment that reveals it", () => {
     expect(SETTINGS_ID).toBe("settings");
@@ -735,13 +767,79 @@ describe("the settings panel markup", () => {
     }
   });
 
+  test("contains exactly one link per size, and one per spacing", () => {
+    for (const s of TEXT_SIZES) {
+      const links = html.match(new RegExp(`href="/settings\\?size=${s.id}&amp;`, "g")) ?? [];
+      expect(links.length).toBe(1);
+    }
+    for (const s of LINE_SPACINGS) {
+      const links = html.match(new RegExp(`href="/settings\\?spacing=${s.id}&amp;`, "g")) ?? [];
+      expect(links.length).toBe(1);
+    }
+    expect((html.match(/href="\/settings\?size=/g) ?? []).length).toBe(TEXT_SIZES.length);
+    expect((html.match(/href="\/settings\?spacing=/g) ?? []).length).toBe(
+      LINE_SPACINGS.length,
+    );
+  });
+
+  test("sets each size and spacing option in the type it names", () => {
+    // The same argument as the font previews: nobody picks between five sizes
+    // from the words "Small" and "Medium". TYPE_CSS keys its previews on these
+    // class names, so a mismatch here is an option that shows nothing.
+    for (const s of TEXT_SIZES) {
+      expect(html).toContain(`class="settings-option settings-size-${s.id}"`);
+      expect(html).toContain(`>${s.label}</span>`);
+    }
+    for (const s of LINE_SPACINGS) {
+      expect(html).toContain(`class="settings-option settings-spacing-${s.id}"`);
+      expect(html).toContain(`>${s.label}</span>`);
+    }
+  });
+
+  test("gives the spacing options enough text to show their leading", () => {
+    // Leading is invisible on one line. Each spacing detail has to wrap at the
+    // panel's measure or the preview shows the reader nothing at all.
+    for (const s of LINE_SPACINGS) {
+      const at = html.indexOf(`settings-spacing-${s.id}`);
+      const detail = html
+        .slice(at)
+        .match(/<span class="settings-option-detail">([^<]*)<\/span>/)?.[1];
+      expect(detail ?? "").toContain(s.note);
+      expect((detail ?? "").length).toBeGreaterThan(120);
+    }
+  });
+
+  test("orders the groups typography first, room last", () => {
+    const order = [
+      "settings-font-group",
+      "settings-size-group",
+      "settings-spacing-group",
+      "settings-theme-group",
+    ].map((id) => html.indexOf(`<h3 class="settings-group" id="${id}">`));
+    expect(order.every((i) => i > -1)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  test("every list is labelled by the heading above it", () => {
+    // The panel has no <form> and no <fieldset>, so aria-labelledby is the only
+    // thing telling a screen reader which group a link belongs to.
+    const lists = html.match(/<ul class="settings-options" aria-labelledby="([^"]+)">/g) ?? [];
+    expect(lists.length).toBe(4);
+    for (const list of lists) {
+      const id = list.match(/aria-labelledby="([^"]+)"/)![1];
+      expect(html).toContain(`id="${id}"`);
+    }
+  });
+
   test("marks the current selections, in markup and in words", () => {
-    expect((html.match(/aria-current="true"/g) ?? []).length).toBe(2);
+    // One per group, always: every group has a current value, including the
+    // ones the reader has never touched.
+    expect((html.match(/aria-current="true"/g) ?? []).length).toBe(4);
     expect(html).toContain(`class="settings-option font-literata" href="/settings?font=literata`);
     expect(html).toContain(`font=literata&amp;to=%2Fstory%2F44921137%23settings" rel="nofollow" aria-current="true"`);
     expect(html).toContain(`theme=dark&amp;to=%2Fstory%2F44921137%23settings" rel="nofollow" aria-current="true"`);
     // The word carries the same information when the stylesheet does not load.
-    expect((html.match(/<span class="settings-state">Selected<\/span>/g) ?? []).length).toBe(2);
+    expect((html.match(/<span class="settings-state">Selected<\/span>/g) ?? []).length).toBe(4);
   });
 
   test("returns the reader to the page they were on, panel still open", () => {
@@ -756,7 +854,7 @@ describe("the settings panel markup", () => {
 
   test("every option link is nofollow, because each one mutates a cookie", () => {
     const anchors = html.match(/<a class="settings-option[^>]*>/g) ?? [];
-    expect(anchors.length).toBe(FONTS.length + 3);
+    expect(anchors.length).toBe(GROUP_COUNT);
     for (const a of anchors) expect(a).toContain('rel="nofollow"');
   });
 
@@ -768,7 +866,7 @@ describe("the settings panel markup", () => {
     // `path` comes from the request. It goes through the same open-redirect
     // guard the route uses rather than a second, subtly different one.
     for (const path of ["//evil.com", "https://evil.com", "/a\r\nb", "\\\\evil.com"]) {
-      const out = settingsPanelHtml({ path, font: "charis", theme: "auto" });
+      const out = panel({ path, font: "charis" });
       expect(out).not.toContain("evil.com");
       expect(out).toContain('href="/"');
       expect(out).toContain("to=%2F%23settings");
@@ -778,7 +876,7 @@ describe("the settings panel markup", () => {
   test("a quote in an accepted path cannot break out of the attribute", () => {
     // `/x"...` is a legal same-origin path, so the redirect guard passes it and
     // escaping is the only thing between it and an injected event handler.
-    const out = settingsPanelHtml({ path: '/x" onmouseover="alert(1)', font: "charis", theme: "auto" });
+    const out = panel({ path: '/x" onmouseover="alert(1)', font: "charis" });
     expect(out).toContain('href="/x&quot; onmouseover=&quot;alert(1)"');
     expect(out).not.toContain('href="/x" ');
     // No attribute value anywhere in the document contains a bare quote.
@@ -790,16 +888,18 @@ describe("the settings panel markup", () => {
   /**
    * Degradation. With the stylesheet gone this has to read as an ordinary
    * settings section at the end of the page, not as a broken overlay - so the
-   * structure alone, with every class ignored, must still be a heading, two
+   * structure alone, with every class ignored, must still be a heading, four
    * labelled lists of links, and a way back.
    */
   test("reads as a plain settings section with every style stripped", () => {
     const stripped = html.replace(/ (?:class|id|aria-[a-z]+|rel)="[^"]*"/g, "");
     expect(stripped).toContain("<h2>Settings</h2>");
     expect(stripped).toContain("<h3>Reading font</h3>");
+    expect(stripped).toContain("<h3>Text size</h3>");
+    expect(stripped).toContain("<h3>Line spacing</h3>");
     expect(stripped).toContain("<h3>Theme</h3>");
-    expect((stripped.match(/<ul>/g) ?? []).length).toBe(2);
-    expect((stripped.match(/<li>/g) ?? []).length).toBe(FONTS.length + 3);
+    expect((stripped.match(/<ul>/g) ?? []).length).toBe(4);
+    expect((stripped.match(/<li>/g) ?? []).length).toBe(GROUP_COUNT);
     expect(stripped).toContain("Close settings");
     // Nothing in it depends on scripting, inline styles or a form control.
     expect(stripped).not.toContain("<script");
@@ -812,9 +912,9 @@ describe("the settings panel markup", () => {
 
   test("tracks the current selection for any combination", () => {
     for (const id of IDS) {
-      const out = settingsPanelHtml({ path: "/", font: id, theme: "auto" });
+      const out = panel({ path: "/", font: id });
       const marked = out.match(/class="settings-option ([a-z-]+)" href="[^"]*" rel="nofollow" aria-current/g) ?? [];
-      expect(marked.length).toBe(2);
+      expect(marked.length).toBe(4);
       expect(marked[0]).toContain(`font-${id}`);
     }
   });

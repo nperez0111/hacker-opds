@@ -28,6 +28,7 @@
  */
 import type { H3Event } from "nitro/h3";
 
+import { cookieValue, PREFERENCE_MAX_AGE, preferenceCookie } from "~/web/cookie";
 import {
   FONT_FACE_FILES,
   FONT_UNICODE_RANGE,
@@ -140,7 +141,7 @@ export const DEFAULT_FONT: FontId = "charis";
 export const FONT_COOKIE = "font";
 
 /** A year, matching the theme cookie. Re-asking a reader is pure friction. */
-export const FONT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
+export const FONT_COOKIE_MAX_AGE = PREFERENCE_MAX_AGE;
 
 const BY_ID: ReadonlyMap<string, FontEntry> = new Map(FONTS.map((f) => [f.id, f]));
 
@@ -166,32 +167,15 @@ export function fontStack(id: FontId): string {
 /* ------------------------------------------------------------------ */
 
 /**
- * Minimal cookie lookup, taking the raw header so it stays a pure function and
- * does not drag an H3Event into every test. Same shape as
- * `themeFromCookieHeader`, deliberately, including the failure behaviour.
+ * The font this request asked for, or the default for anything unrecognised.
+ *
+ * Takes the raw header so it stays a pure function and does not drag an
+ * H3Event into every test. Same failure behaviour as every other preference -
+ * see `~/web/cookie`.
  */
 export function fontFromCookieHeader(header: string | null): FontId {
-  if (!header) return DEFAULT_FONT;
-  for (const part of header.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() !== FONT_COOKIE) continue;
-    /*
-     * `decodeURIComponent` throws `URIError` on a malformed escape ("font=%").
-     * This runs on every request before anything renders, so an unhandled throw
-     * is a 500 on every page for anyone holding a corrupt cookie - which they
-     * cannot clear, because the site never loads far enough to offer them the
-     * settings panel. A cookie that cannot be read means "no preference".
-     */
-    let value: string;
-    try {
-      value = decodeURIComponent(part.slice(eq + 1).trim());
-    } catch {
-      return DEFAULT_FONT;
-    }
-    return isFontId(value) ? value : DEFAULT_FONT;
-  }
-  return DEFAULT_FONT;
+  const value = cookieValue(header, FONT_COOKIE);
+  return value !== null && isFontId(value) ? value : DEFAULT_FONT;
 }
 
 export function readFont(event: H3Event): FontId {
@@ -199,9 +183,7 @@ export function readFont(event: H3Event): FontId {
 }
 
 export function fontCookie(id: FontId): string {
-  return (
-    `${FONT_COOKIE}=${id}; Path=/; Max-Age=${FONT_COOKIE_MAX_AGE}; ` + `SameSite=Lax`
-  );
+  return preferenceCookie(FONT_COOKIE, id);
 }
 
 /* ------------------------------------------------------------------ */

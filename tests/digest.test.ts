@@ -16,6 +16,7 @@ import { mockEvent, HTTPError, type H3Event } from "nitro/h3";
 import { resetConfig, setConfigForTests } from "~/config";
 import { getDb, resetDbForTests } from "~/db/client";
 import { flattenComments, saveComments } from "~/core/comments";
+import { saveArticle } from "~/core/extract";
 import type { CommentNode } from "~/core/tree";
 import type { StoryRow } from "~/core/edition";
 import { getBuild } from "~/build/artifacts";
@@ -258,6 +259,50 @@ describe("composeEditionEpub", () => {
     expect(contents.indexOf("Second story")).toBeLessThan(contents.indexOf("Third story"));
     expect(contents).toContain("s001.xhtml");
     expect(contents).toContain("3 stories, with comments");
+  });
+
+  test("times each story on the contents page, since there is no scrollbar to judge by", async () => {
+    const stories = seedThreeStories();
+    /*
+     * A digest is thirty articles behind one cover. "Which of these do I have
+     * time for" is the question the contents page is being asked, and neither
+     * the score nor the comment count answers it.
+     */
+    saveArticle({
+      story_id: stories[0]!.id,
+      state: "ok",
+      fetched_at: BASE,
+      http_status: 200,
+      final_url: "https://example.com/a",
+      title: "First story",
+      author: null,
+      published: null,
+      site: "example.com",
+      language: "en",
+      word_count: 1200,
+      xhtml: "<p>Long enough to time.</p>",
+      markdown: "Long enough to time.",
+      error_code: null,
+    });
+
+    const { text } = await openEpub(await composeEditionEpub(DATE, stories));
+    const contents = await text("OEBPS/contents.xhtml");
+
+    expect(contents).toContain("412 points \u00b7 9 comments \u00b7 5 min");
+    // The short spelling, matching the web rows rather than the front matter's
+    // raw word count.
+    expect(contents).not.toContain("min read");
+  });
+
+  test("omits the time for a story whose article never extracted", async () => {
+    // The text posts seeded here have no article behind them, which is the
+    // ordinary case and must not print "0 min" or an empty separator.
+    const stories = seedThreeStories();
+    const { text } = await openEpub(await composeEditionEpub(DATE, stories));
+    const contents = await text("OEBPS/contents.xhtml");
+
+    expect(contents).toContain("412 points \u00b7 9 comments<");
+    expect(contents).not.toContain("\u00b7 </span>");
   });
 
   test("orders the spine contents, then article and comments per story", async () => {

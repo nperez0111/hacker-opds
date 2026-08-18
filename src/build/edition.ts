@@ -48,6 +48,7 @@ import {
 } from "~/epub/render";
 import { EPUB_CSS, EPUB_CSS_HREF, EPUB_CSS_ID } from "~/epub/styles";
 import { errFields, log } from "~/log";
+import { readingTime } from "~/web/format";
 import {
   artifactUsable,
   clearBuild,
@@ -184,11 +185,22 @@ export async function composeEditionEpub(
     href: articleHref(c.index),
     rank: c.story.rank,
     title: c.story.title,
+    /*
+     * The reading time is the one fact here a reader cannot get any other way.
+     * A digest is thirty articles behind one cover with no scrollbar to judge
+     * them by, so the question this page is being asked is "which of these do I
+     * have time for", and the answer is not in the points or the comment count.
+     * It is omitted rather than zeroed when extraction produced too little text
+     * to trust, which is the same rule the web rows use.
+     */
     facts: [
       c.story.domain ?? "news.ycombinator.com",
       `${c.story.points} points`,
       `${c.story.num_comments} comments`,
-    ].join(" \u00b7 "),
+      readingTime(c.article.word_count, "short"),
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join(" \u00b7 "),
   }));
 
   resources.push({

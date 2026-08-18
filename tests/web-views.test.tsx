@@ -13,7 +13,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { CommentRow } from "~/core/comments";
-import type { EditionSummary, StoryRow } from "~/core/edition";
+import type { EditionSummary, StoryListRow } from "~/core/edition";
 import type { ArticleRecord } from "~/core/extract";
 import {
   APPLE_TOUCH_ICON_URL,
@@ -27,7 +27,14 @@ import { DEFAULT_FONT, FONT_CSS_URL, type FontId } from "~/web/fonts";
 import { CACHE_MAX_AGE_DAYS } from "~/web/offline";
 import type { EditionSaveSize } from "~/web/size";
 import { SITE_NAME, SOURCE_URL, Shell, isCurrentSection, pageAttrs } from "~/web/layout";
+import type { Preferences } from "~/web/settings";
 import type { Theme } from "~/web/theme";
+import {
+  DEFAULT_LINE_SPACING,
+  DEFAULT_TEXT_SIZE,
+  type LineSpacing,
+  type TextSize,
+} from "~/web/type";
 import {
   ArchiveView,
   EditionView,
@@ -38,7 +45,13 @@ import {
 
 const T0 = 1_755_302_400; // 2025-08-16T00:00:00Z
 
-function story(over: Partial<StoryRow> = {}): StoryRow {
+/*
+ * Carries `word_count` because the list views take a `StoryListRow`, and the
+ * default is a real article's length rather than null: a fixture that leaves it
+ * out passes every assertion about a row while exercising none of the reading
+ * time, which is how this stayed silently uncovered once already.
+ */
+function story(over: Partial<StoryListRow> = {}): StoryListRow {
   return {
     id: 44921137,
     edition_date: "2026-08-16",
@@ -52,6 +65,7 @@ function story(over: Partial<StoryRow> = {}): StoryRow {
     created_at_i: T0,
     story_text: null,
     is_text_post: 0,
+    word_count: 1200,
     ...over,
   };
 }
@@ -127,20 +141,20 @@ async function renderPage(
   opts: {
     theme?: Theme;
     font?: FontId;
+    size?: TextSize;
+    spacing?: LineSpacing;
     path?: string;
     title?: string;
     description?: string;
   } = {},
 ): Promise<string> {
-  const theme = opts.theme ?? "auto";
-  const font = opts.font ?? DEFAULT_FONT;
+  const prefs = preferences(opts);
   const path = opts.path ?? "/";
   return asResponse(
-    <html {...pageAttrs({ theme, font })}>
+    <html {...pageAttrs({ prefs })}>
       <Shell
         title={opts.title ?? "Today"}
-        theme={theme}
-        font={font}
+        prefs={prefs}
         path={path}
         description={opts.description}
       >
@@ -148,6 +162,23 @@ async function renderPage(
       </Shell>
     </html>,
   ).text();
+}
+
+/** A full preference set, defaulted, so a test only names what it is about. */
+function preferences(
+  opts: {
+    theme?: Theme;
+    font?: FontId;
+    size?: TextSize;
+    spacing?: LineSpacing;
+  } = {},
+): Preferences {
+  return {
+    theme: opts.theme ?? "auto",
+    font: opts.font ?? DEFAULT_FONT,
+    size: opts.size ?? DEFAULT_TEXT_SIZE,
+    spacing: opts.spacing ?? DEFAULT_LINE_SPACING,
+  };
 }
 
 /** The rendered `<main>` only, for assertions that should ignore the chrome. */
@@ -200,26 +231,50 @@ describe("isCurrentSection", () => {
 });
 
 describe("pageAttrs", () => {
-  test("always emits lang and data-theme", () => {
-    expect(pageAttrs({ theme: "auto" })).toEqual({ lang: "en", "data-theme": "auto" });
+  test("emits lang and every preference as an attribute", () => {
+    expect(pageAttrs({ prefs: preferences() })).toEqual({
+      lang: "en",
+      "data-theme": "auto",
+      "data-font": DEFAULT_FONT,
+      "data-size": DEFAULT_TEXT_SIZE,
+      "data-spacing": DEFAULT_LINE_SPACING,
+    });
   });
 
-  test("emits data-theme for auto too", () => {
-    // The stylesheet keys its prefers-color-scheme block off
-    // [data-theme="auto"] specifically, so omitting it leaves no theme at all.
-    expect(pageAttrs({ theme: "auto" })["data-theme"]).toBe("auto");
-    expect(pageAttrs({ theme: "dark" })["data-theme"]).toBe("dark");
-    expect(pageAttrs({ theme: "light" })["data-theme"]).toBe("light");
+  test("emits every preference even at its default value", () => {
+    /*
+     * The stylesheet keys on the attribute, not on its absence: the
+     * prefers-color-scheme block is written [data-theme="auto"] specifically,
+     * and the size and spacing rules exist to override base rules that would
+     * otherwise still apply. An omitted attribute is not "the default", it is
+     * no rule at all.
+     */
+    const attrs = pageAttrs({ prefs: preferences() });
+    expect(attrs["data-theme"]).toBe("auto");
+    expect(attrs["data-size"]).toBe(DEFAULT_TEXT_SIZE);
+    expect(attrs["data-spacing"]).toBe(DEFAULT_LINE_SPACING);
+  });
+
+  test("carries each preference through to its own attribute", () => {
+    const attrs = pageAttrs({
+      prefs: preferences({ theme: "dark", font: "atkinson", size: "xl", spacing: "tight" }),
+    });
+    expect(attrs["data-theme"]).toBe("dark");
+    expect(attrs["data-font"]).toBe("atkinson");
+    expect(attrs["data-size"]).toBe("xl");
+    expect(attrs["data-spacing"]).toBe("tight");
   });
 
   test("omits status entirely when it is not given, rather than sending 200", () => {
-    expect(pageAttrs({ theme: "dark" })).not.toHaveProperty("status");
-    expect(pageAttrs({ theme: "dark", status: 404 })).toHaveProperty("status", 404);
+    expect(pageAttrs({ prefs: preferences() })).not.toHaveProperty("status");
+    expect(pageAttrs({ prefs: preferences(), status: 404 })).toHaveProperty("status", 404);
   });
 
   test("omits headers when no cache-control is given", () => {
-    expect(pageAttrs({ theme: "dark" })).not.toHaveProperty("headers");
-    expect(pageAttrs({ theme: "dark", cacheControl: "no-cache" })).toMatchObject({
+    expect(pageAttrs({ prefs: preferences() })).not.toHaveProperty("headers");
+    expect(
+      pageAttrs({ prefs: preferences(), cacheControl: "no-cache" }),
+    ).toMatchObject({
       headers: { "cache-control": "no-cache" },
     });
   });
@@ -228,8 +283,14 @@ describe("pageAttrs", () => {
 describe("Shell - document", () => {
   test("renders a real Response, not an inert node", () => {
     const res = asResponse(
-      <html {...pageAttrs({ theme: "dark", status: 404, cacheControl: "no-store" })}>
-        <Shell title="No such story" theme="dark" path="/">
+      <html
+        {...pageAttrs({
+          prefs: preferences({ theme: "dark" }),
+          status: 404,
+          cacheControl: "no-store",
+        })}
+      >
+        <Shell title="No such story" prefs={preferences({ theme: "dark" })} path="/">
           <NotFoundView message="Gone." />
         </Shell>
       </html>,
@@ -513,7 +574,8 @@ describe("Shell - head metadata", () => {
 describe("EditionView", () => {
   const stories = [
     story({ id: 1, title: "First story", points: 1, num_comments: 1 }),
-    story({ id: 2, title: "Second story", domain: null, is_text_post: 1 }),
+    // No article row behind it, which is the ordinary case for a text post.
+    story({ id: 2, title: "Second story", domain: null, is_text_post: 1, word_count: null }),
     story({ id: 3, title: "Third story" }),
   ];
 
@@ -550,7 +612,7 @@ describe("EditionView", () => {
         <EditionView
           date="2026-08-16"
           today="2026-08-16"
-          stories={[stories[0] as StoryRow]}
+          stories={[stories[0] as StoryListRow]}
           save={SAVE}
         />,
       ),
@@ -600,10 +662,42 @@ describe("EditionView", () => {
     );
     expect(main).toContain('<span class="story-title">First story</span>');
     expect(main).toContain(
-      '<span class="story-meta">seangoedecke.com \u00b7 1 point \u00b7 1 comment</span>',
+      '<span class="story-meta">seangoedecke.com \u00b7 1 point \u00b7 1 comment \u00b7 5 min</span>',
     );
-    // The text post names Hacker News as its source instead of a domain.
-    expect(main).toContain("Hacker News \u00b7 957 points \u00b7 208 comments");
+    // The text post names Hacker News as its source instead of a domain, and
+    // has no article behind it, so the line ends at the comment count.
+    expect(main).toContain(
+      '<span class="story-meta">Hacker News \u00b7 957 points \u00b7 208 comments</span>',
+    );
+  });
+
+  test("says how long a row takes to read, but never says 'read' about it", async () => {
+    const main = mainOf(
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
+    );
+    /*
+     * The short spelling. On a 34rem meta line already carrying a domain, a
+     * score and a comment count, "read" is the one word in it that no reader
+     * needs, and it is what pushes the line onto a second row on a Kobo.
+     */
+    expect(main).toContain("1 comment \u00b7 5 min");
+    expect(main).not.toContain("min read");
+  });
+
+  test("omits the reading time rather than claiming a minute for a failed extraction", async () => {
+    const main = mainOf(
+      await renderPage(
+        <EditionView
+          date="2026-08-16"
+          today="2026-08-16"
+          // 40 words is a paywall stub, not a forty-word article.
+          stories={[story({ word_count: 40 }), story({ id: 9, word_count: null })]}
+          save={SAVE}
+        />,
+      ),
+    );
+    expect(main).not.toContain("min");
+    expect(main).toContain("957 points \u00b7 208 comments</span>");
   });
 
   test("escapes a hostile story title", async () => {

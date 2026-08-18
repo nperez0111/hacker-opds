@@ -112,6 +112,43 @@ describe("storyMetaParts", () => {
     const parts = storyMetaParts(story({ domain: null, is_text_post: 0 }));
     expect(parts).toEqual(["957 points", "208 comments"]);
   });
+
+  test("puts the length last, after the facts a reader scans by", () => {
+    /*
+     * Length is a tiebreak, not a scanning signal: nobody picks a story off a
+     * list because it is eight minutes long, but plenty of readers decide
+     * against one they had already chosen. It belongs after the decision.
+     */
+    expect(storyMetaParts(story(), 1200)).toEqual([
+      "seangoedecke.com",
+      "957 points",
+      "208 comments",
+      "5 min",
+    ]);
+  });
+
+  test("says nothing about length when there is no article behind the row", () => {
+    // The OPDS and RSS callers have a story row and no article at all, which is
+    // why the parameter is optional rather than nullable-and-required.
+    expect(storyMetaParts(story())).toEqual([
+      "seangoedecke.com",
+      "957 points",
+      "208 comments",
+    ]);
+    expect(storyMetaParts(story(), null)).toEqual([
+      "seangoedecke.com",
+      "957 points",
+      "208 comments",
+    ]);
+  });
+
+  test("says nothing about length when extraction produced too little to trust", () => {
+    expect(storyMetaParts(story(), 40)).toEqual([
+      "seangoedecke.com",
+      "957 points",
+      "208 comments",
+    ]);
+  });
 });
 
 describe("longDate", () => {
@@ -284,6 +321,23 @@ describe("readingTime", () => {
     expect(readingTime(Number.NaN)).toBeNull();
     expect(readingTime(Number.POSITIVE_INFINITY)).toBeNull();
     expect(readingTime(-500)).toBeNull();
+  });
+
+  test("drops the word 'read' in the short spelling, and nothing else", () => {
+    /*
+     * Two spellings for two contexts: prose under a headline, where "5 min"
+     * alone reads as a fragment, and a dense meta line where "read" is the
+     * only word in it that carries no information and costs a wrap.
+     */
+    expect(readingTime(1200, "short")).toBe("5 min");
+    expect(readingTime(1200, "long")).toBe("5 min read");
+    expect(readingTime(1200)).toBe("5 min read");
+  });
+
+  test("the short spelling agrees with the long one about when to say nothing", () => {
+    expect(readingTime(99, "short")).toBeNull();
+    expect(readingTime(Number.NaN, "short")).toBeNull();
+    expect(readingTime(100, "short")).toBe("1 min");
   });
 });
 

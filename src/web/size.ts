@@ -95,10 +95,16 @@ export const COMMENT_CHROME_BYTES = 252;
  *
  * Not fitted - measured directly, since an edition page is nothing but shell
  * plus thirty of these. The eight edition pages in the database render between
- * 19,724 and 20,103 bytes, which against the shell above is 419 to 432 bytes a
- * row, and 430 puts every one of them inside 1.7%.
+ * 19,947 and 20,356 bytes, which against the shell above is 427 to 440 bytes a
+ * row, and 435 puts every one of them inside 1.3%.
+ *
+ * This went up by eight bytes when rows started carrying a reading time, which
+ * is less than the eleven " \u00b7 12 min" costs because a row whose extraction
+ * failed still does not carry one. That is the reason this is re-measured
+ * rather than adjusted: the spread between rows is a function of how many of
+ * them have an article behind them, which is not a number this module knows.
  */
-export const STORY_ROW_BYTES = 430;
+export const STORY_ROW_BYTES = 435;
 
 /**
  * Identity bytes per byte on the wire. See the module note on why this is the

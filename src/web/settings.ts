@@ -1,5 +1,6 @@
 /**
- * The settings panel: reading font and theme, as links.
+ * The settings panel: reading font, text size, line spacing and theme, as
+ * links.
  *
  * ## Why it is not a modal in the usual sense
  *
@@ -25,18 +26,35 @@
  * ## Degradation
  *
  * With the stylesheet gone, or on a browser too old to know `:target`, this is
- * a heading, two labelled lists of links, and a Close link, sitting after the
+ * a heading, four labelled lists of links, and a Close link, sitting after the
  * footer. That is not a broken overlay; it is a settings section, which is what
  * it always was. See the note on `.settings:not(:target)` in `SETTINGS_CSS` for
  * how the "too old to know :target" case is arranged to fail open.
+ *
+ * The typographic options degrade further than that and it is worth being
+ * precise about how: with no stylesheet there is no preview, so each one is a
+ * name and a sentence rather than a name and a demonstration. They still set
+ * their cookie, and the cookie still has no effect, because the rules that
+ * would apply it went with the sheet. Nothing is broken by this that was not
+ * already broken by losing the sheet.
  *
  * It is an HTML string rather than a component because it has no dynamic
  * structure worth a renderer, and because a string is assertable from a plain
  * `.ts` test with no JSX runtime in the way. The shell drops it in with
  * mono-jsx's `html()` raw helper, the same way story bodies are injected.
  */
-import { FONTS, type FontId } from "~/web/fonts";
-import { safeReturnPath, type Theme } from "~/web/theme";
+import type { H3Event } from "nitro/h3";
+
+import { FONTS, readFont, type FontId } from "~/web/fonts";
+import { readTheme, safeReturnPath, type Theme } from "~/web/theme";
+import {
+  LINE_SPACINGS,
+  readLineSpacing,
+  readTextSize,
+  TEXT_SIZES,
+  type LineSpacing,
+  type TextSize,
+} from "~/web/type";
 
 /** The fragment that reveals the panel. `<a href="#settings">` opens it. */
 export const SETTINGS_ID = "settings";
@@ -51,6 +69,17 @@ export const SETTINGS_ID = "settings";
  * which is the entire reason each option is set in its own font.
  */
 const SPECIMEN = "Hamburgefonstiv 0O1lI";
+
+/**
+ * The specimen shown beside each line spacing.
+ *
+ * Long enough to wrap, which is the whole point: leading is the gap between
+ * lines and a one-line sample shows none of it. The font specimen can be five
+ * words because a letterform is visible in one; this cannot.
+ */
+const SPACING_SPECIMEN =
+  "Set at this spacing, so the gap between the lines is something you can see " +
+  "here rather than only after the panel is closed.";
 
 interface ThemeOption {
   id: Theme;
@@ -84,12 +113,43 @@ function text(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export interface SettingsPanelOptions {
-  /** Path of the page being rendered. The panel returns the reader here. */
-  path: string;
-  /** Current selection, resolved from the cookie by the route. */
+/**
+ * Everything the reader has chosen, resolved from cookies.
+ *
+ * One object rather than four parameters because every one of these has to
+ * reach both `<html>` and the panel, through a `pageAttrs` call and a `Shell`
+ * call, in each of six routes. Threaded individually that is a preference
+ * arriving in twenty-four places, and the failure mode is silent: a route that
+ * forgets one renders a page that ignores a setting the panel reports as
+ * Selected. As one value the compiler cannot be talked out of noticing.
+ */
+export interface Preferences {
   font: FontId;
   theme: Theme;
+  size: TextSize;
+  spacing: LineSpacing;
+}
+
+/**
+ * The whole set, off one request.
+ *
+ * Four independent cookie lookups over the same header. That is four passes
+ * where one would do, and it is not worth fixing: the header is a few hundred
+ * bytes and the alternative is a parser that returns a map, which every caller
+ * would then have to index with a string instead of a name.
+ */
+export function readPreferences(event: H3Event): Preferences {
+  return {
+    font: readFont(event),
+    theme: readTheme(event),
+    size: readTextSize(event),
+    spacing: readLineSpacing(event),
+  };
+}
+
+export interface SettingsPanelOptions extends Preferences {
+  /** Path of the page being rendered. The panel returns the reader here. */
+  path: string;
 }
 
 function option(opts: {
@@ -141,6 +201,31 @@ export function settingsPanelHtml(opts: SettingsPanelOptions): string {
     }),
   ).join("");
 
+  /*
+   * The note is the whole detail here, with no specimen prefixed, because the
+   * note is already a sentence and the preview class sets it at the size it
+   * names. The sentence is the specimen.
+   */
+  const sizeOptions = TEXT_SIZES.map((s) =>
+    option({
+      href: `/settings?size=${s.id}&to=${to}`,
+      className: `settings-size-${s.id}`,
+      label: s.label,
+      detail: s.note,
+      current: s.id === opts.size,
+    }),
+  ).join("");
+
+  const spacingOptions = LINE_SPACINGS.map((s) =>
+    option({
+      href: `/settings?spacing=${s.id}&to=${to}`,
+      className: `settings-spacing-${s.id}`,
+      label: s.label,
+      detail: `${s.note} ${SPACING_SPECIMEN}`,
+      current: s.id === opts.spacing,
+    }),
+  ).join("");
+
   const themeOptions = THEME_OPTIONS.map((t) =>
     option({
       href: `/settings?theme=${t.id}&to=${to}`,
@@ -151,12 +236,22 @@ export function settingsPanelHtml(opts: SettingsPanelOptions): string {
     }),
   ).join("");
 
+  /*
+   * Font, size, spacing, theme. The three typographic groups sit together
+   * because a reader adjusting one has usually just been unsatisfied by
+   * another, and theme is last because it is the one choice that is about the
+   * room rather than the page.
+   */
   return (
     `<section id="${SETTINGS_ID}" class="settings" aria-labelledby="settings-title">` +
     `<h2 class="settings-title" id="settings-title">Settings</h2>` +
     `<p class="settings-intro">Stored in a cookie on this device. No account, no scripting.</p>` +
     `<h3 class="settings-group" id="settings-font-group">Reading font</h3>` +
     `<ul class="settings-options" aria-labelledby="settings-font-group">${fontOptions}</ul>` +
+    `<h3 class="settings-group" id="settings-size-group">Text size</h3>` +
+    `<ul class="settings-options" aria-labelledby="settings-size-group">${sizeOptions}</ul>` +
+    `<h3 class="settings-group" id="settings-spacing-group">Line spacing</h3>` +
+    `<ul class="settings-options" aria-labelledby="settings-spacing-group">${spacingOptions}</ul>` +
     `<h3 class="settings-group" id="settings-theme-group">Theme</h3>` +
     `<ul class="settings-options" aria-labelledby="settings-theme-group">${themeOptions}</ul>` +
     `<p class="settings-done">` +

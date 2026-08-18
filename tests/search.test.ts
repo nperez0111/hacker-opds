@@ -467,6 +467,27 @@ describe("reindexAll", () => {
 describe("searchStories", () => {
   withTempDataDir();
 
+  test("carries the article's length, so a hit can be timed like an edition row", () => {
+    seedIndexed({ id: 21, title: "Long one" }, Array(1200).fill("zzlong").join(" "));
+
+    const [hit] = searchStories("zzlong").hits;
+    expect(hit?.word_count).toBe(1200);
+  });
+
+  test("reports a missing article as null rather than dropping the hit", () => {
+    /*
+     * A story indexed off its own title with no extraction behind it is common
+     * in the archive, and a story that cannot be found because its article
+     * failed would be a worse bug than one whose length is unknown.
+     */
+    seedStory({ id: 22, title: "zzbare headline" });
+    indexStory(22);
+
+    const [hit] = searchStories("zzbare").hits;
+    expect(hit?.id).toBe(22);
+    expect(hit?.word_count).toBeNull();
+  });
+
   test("returns an empty result for an empty or unsearchable query", () => {
     seedIndexed({ id: 20 }, "anything at all");
 
@@ -758,6 +779,31 @@ describe("GET /search", () => {
     expect(html).toContain('href="/story/60"');
     expect(html).toContain("zzgpu");
     expect(html).toContain("1 result");
+  });
+
+  test("times a result the way the edition list does, with the date still last", async () => {
+    seedIndexed(
+      { id: 61, title: "Long result", domain: "example.com", points: 1, num_comments: 1 },
+      Array(1200).fill("zztimed").join(" "),
+    );
+
+    const html = await (await call(searchPageRoute, event("/search?q=zztimed"))).text();
+    /*
+     * The first four facts are in the same order as an edition row. The date is
+     * appended after them rather than woven in, because it is the one fact a
+     * search result has that an edition row never needs.
+     */
+    expect(html).toContain("example.com \u00b7 1 point \u00b7 1 comment \u00b7 5 min \u00b7 ");
+    expect(html).not.toContain("min read");
+  });
+
+  test("says nothing about length for a hit whose article never extracted", async () => {
+    seedStory({ id: 62, title: "zzbarehit headline" });
+    indexStory(62);
+
+    const html = await (await call(searchPageRoute, event("/search?q=zzbarehit"))).text();
+    expect(html).toContain("zzbarehit");
+    expect(html).not.toContain(" min \u00b7 ");
   });
 
   test("says so when nothing matches", async () => {

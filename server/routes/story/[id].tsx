@@ -4,11 +4,10 @@ import { getComments, groupThreads } from "~/core/comments";
 import { getStory } from "~/core/edition";
 import { getArticle } from "~/core/extract";
 import { snippet } from "~/epub/render";
-import { readFont } from "~/web/fonts";
 import { Shell, pageAttrs } from "~/web/layout";
+import { readPreferences } from "~/web/settings";
 import { HN_ITEM } from "~/web/story";
 import { StoryView, NotFoundView } from "~/web/views";
-import { readTheme } from "~/web/theme";
 
 /**
  * `GET /story/<id>` - the readable article plus its comment tree.
@@ -23,16 +22,15 @@ import { readTheme } from "~/web/theme";
  * that opens instantly from a service worker cache on a device with no radio.
  */
 export default defineHandler((event) => {
-  const theme = readTheme(event);
-  const font = readFont(event);
+  const prefs = readPreferences(event);
   const raw = event.context.params?.id ?? "";
   const id = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
   const story = Number.isFinite(id) ? getStory(id) : null;
 
   if (!story) {
     return (
-      <html {...pageAttrs({ theme, font, status: 404, cacheControl: "no-store" })}>
-        <Shell title="No such story" theme={theme} font={font} path="/">
+      <html {...pageAttrs({ prefs, status: 404, cacheControl: "no-store" })}>
+        <Shell title="No such story" prefs={prefs} path="/">
           <NotFoundView message="That story is not in any edition we hold." />
         </Shell>
       </html>
@@ -48,11 +46,10 @@ export default defineHandler((event) => {
     article && article.xhtml ? snippet(article.xhtml, 180) : undefined;
 
   return (
-    <html {...pageAttrs({ theme, font, cacheControl: "public, max-age=86400" })}>
+    <html {...pageAttrs({ prefs, cacheControl: "public, max-age=86400" })}>
       <Shell
         title={story.title}
-        theme={theme}
-        font={font}
+        prefs={prefs}
         path="/"
         description={description}
         meta={{

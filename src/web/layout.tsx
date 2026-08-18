@@ -21,9 +21,8 @@ import {
   ICON_SVG_URL,
   MANIFEST_URL,
 } from "~/web/assets";
-import { FONT_CSS_URL, type FontId } from "~/web/fonts";
-import { SETTINGS_ID, settingsPanelHtml } from "~/web/settings";
-import type { Theme } from "~/web/theme";
+import { FONT_CSS_URL } from "~/web/fonts";
+import { SETTINGS_ID, settingsPanelHtml, type Preferences } from "~/web/settings";
 
 /**
  * What a component may be handed as children.
@@ -76,8 +75,8 @@ const NAV = [
 ] as const;
 
 export interface PageAttrOptions {
-  theme: Theme;
-  font: FontId;
+  /** Everything the reader chose, read from cookies by the route. */
+  prefs: Preferences;
   /** HTTP status, for the error pages that render through the same shell. */
   status?: number;
   /** Cache-Control. Immutable pages set a long max-age; indexes must not. */
@@ -87,16 +86,22 @@ export interface PageAttrOptions {
 /**
  * Attributes for the `<html>` element of a page. Spread, do not rebuild.
  *
- * `data-theme` is always emitted, including for "auto", because the stylesheet
- * keys its prefers-color-scheme block off `[data-theme="auto"]` specifically -
- * an absent attribute would leave a reader with no theme at all.
+ * Every preference is emitted, including the defaults, because the stylesheet
+ * keys on the attribute rather than on its absence: the prefers-color-scheme
+ * block is written `[data-theme="auto"]` specifically, so a missing attribute
+ * leaves a reader with no theme at all rather than with the default one. The
+ * same holds for size and spacing, whose base values live in `html` and `body`
+ * rules that a matching attribute rule is expected to override rather than
+ * silently agree with.
  */
 export function pageAttrs(opts: PageAttrOptions) {
-  const { theme, font, status, cacheControl } = opts;
+  const { prefs, status, cacheControl } = opts;
   return {
     lang: "en",
-    "data-theme": theme,
-    "data-font": font,
+    "data-theme": prefs.theme,
+    "data-font": prefs.font,
+    "data-size": prefs.size,
+    "data-spacing": prefs.spacing,
     ...(status === undefined ? {} : { status }),
     ...(cacheControl === undefined ? {} : { headers: { "cache-control": cacheControl } }),
   };
@@ -141,10 +146,8 @@ export interface PageFeed {
 export interface ShellProps {
   /** Shown in the tab and prefixed onto the site name. */
   title: string;
-  /** Resolved server-side from the cookie. Drives the settings panel. */
-  theme: Theme;
-  /** Resolved server-side from the cookie. Drives the settings panel. */
-  font: FontId;
+  /** Resolved server-side from cookies. Drives the settings panel. */
+  prefs: Preferences;
   /** Path of the page being rendered, for nav highlighting and setting returns. */
   path: string;
   /** Meta description. Omitted rather than faked when a page has nothing to say. */
@@ -172,7 +175,8 @@ export function isCurrentSection(href: string, path: string): boolean {
 }
 
 export function Shell(props: ShellProps) {
-  const { title, theme, font, path, description, meta, feed } = props;
+  const { title, prefs, path, description, meta, feed } = props;
+  const { theme } = prefs;
   const fullTitle = title === SITE_NAME ? title : `${title} \u00b7 ${SITE_NAME}`;
 
   return (
@@ -360,7 +364,7 @@ export function Shell(props: ShellProps) {
          * section at the foot of the page rather than an overlay stuck open
          * across the content.
          */}
-        {html(settingsPanelHtml({ path, font, theme }))}
+        {html(settingsPanelHtml({ path, ...prefs }))}
         {/*
          * Deferred and last. Nothing above depends on it: it registers the
          * service worker and reveals the offline controls, both of which are

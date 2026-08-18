@@ -16,46 +16,29 @@
  * theme, and no script is involved at any point.
  */
 import type { H3Event } from "nitro/h3";
+import { cookieValue, PREFERENCE_MAX_AGE, preferenceCookie } from "~/web/cookie";
 
 export type Theme = "auto" | "light" | "dark";
 
 export const THEME_COOKIE = "theme";
 
 /** One year. The preference is not sensitive and re-asking is pure friction. */
-export const THEME_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
+export const THEME_COOKIE_MAX_AGE = PREFERENCE_MAX_AGE;
 
 export function isTheme(value: string): value is Theme {
   return value === "auto" || value === "light" || value === "dark";
 }
 
 /**
- * Minimal cookie lookup.
+ * The theme this request asked for, or "auto" for anything unrecognised.
  *
- * h3 has a cookie helper, but pulling it in here would make this module need an
- * H3Event to be testable. Taking the raw header keeps the parsing pure.
+ * Takes the raw header rather than an `H3Event` so it stays a pure function.
+ * See `~/web/cookie` for what "unrecognised" covers - it includes a cookie too
+ * corrupt to decode, which must not be allowed to throw here.
  */
 export function themeFromCookieHeader(header: string | null): Theme {
-  if (!header) return "auto";
-  for (const part of header.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() !== THEME_COOKIE) continue;
-    /*
-     * decodeURIComponent throws on a malformed escape ("theme=%"), and this
-     * runs on every request before anything else. An unhandled throw here is
-     * a 500 on every page for anyone holding a corrupt cookie - which they
-     * cannot clear without developer tools, because the site would never load
-     * far enough to offer them the toggle. A bad cookie means "no preference".
-     */
-    let value: string;
-    try {
-      value = decodeURIComponent(part.slice(eq + 1).trim());
-    } catch {
-      return "auto";
-    }
-    return isTheme(value) ? value : "auto";
-  }
-  return "auto";
+  const value = cookieValue(header, THEME_COOKIE);
+  return value !== null && isTheme(value) ? value : "auto";
 }
 
 export function readTheme(event: H3Event): Theme {
@@ -105,8 +88,5 @@ export function safeReturnPath(value: string | null, fallback = "/"): string {
 }
 
 export function themeCookie(theme: Theme): string {
-  return (
-    `${THEME_COOKIE}=${theme}; Path=/; Max-Age=${THEME_COOKIE_MAX_AGE}; ` +
-    `SameSite=Lax`
-  );
+  return preferenceCookie(THEME_COOKIE, theme);
 }

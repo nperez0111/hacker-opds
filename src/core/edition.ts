@@ -245,10 +245,41 @@ export async function ingestEdition(date: string): Promise<StoryRow[]> {
   return rows;
 }
 
-export function getEditionStories(date: string): StoryRow[] {
+/**
+ * A story row carrying the length of its extracted article.
+ *
+ * A separate type rather than a `word_count` column on `StoryRow`, because
+ * `StoryRow` is the shape of a `SELECT *` from `stories` and several call sites
+ * build one as a literal - `searchHitAsStory` in `~/opds/catalog` is the one
+ * that would break first. Keeping the table's shape and the list's shape as two
+ * types means the join is visible in the signature of the function that does
+ * it, and a caller that never needed the length is not made to invent one.
+ *
+ * Null means extraction has not run or produced nothing usable, which is a
+ * different thing from an article of zero words and is displayed differently:
+ * no figure at all rather than "0 min".
+ */
+export interface StoryListRow extends StoryRow {
+  word_count: number | null;
+}
+
+/**
+ * The stories of one edition, in rank order, with article lengths attached.
+ *
+ * A left join rather than a second query keyed by story id. Thirty stories is
+ * thirty round trips through the statement cache to save one join on a table
+ * that is already keyed by `story_id`, and the two-query version has a failure
+ * mode this one cannot have: a story whose article lands between the queries
+ * appears in one result and not the other.
+ */
+export function getEditionStories(date: string): StoryListRow[] {
   return getDb()
-    .query<StoryRow, [string]>(
-      "SELECT * FROM stories WHERE edition_date = ? ORDER BY rank",
+    .query<StoryListRow, [string]>(
+      `SELECT s.*, a.word_count AS word_count
+         FROM stories s
+         LEFT JOIN articles a ON a.story_id = s.id
+        WHERE s.edition_date = ?
+        ORDER BY s.rank`,
     )
     .all(date);
 }

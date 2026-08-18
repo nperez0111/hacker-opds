@@ -29,6 +29,7 @@
  */
 
 import { SETTINGS_CSS } from "~/web/settings";
+import { TYPE_CSS } from "~/web/type";
 
 export const SITE_CSS = `@charset "utf-8";
 
@@ -150,7 +151,7 @@ body {
    */
   text-align: left;
 }
-
+${TYPE_CSS}
 .wrap {
   max-width: var(--wrap);
   margin: 0 auto;
@@ -161,6 +162,11 @@ body {
  * resolved against the browser's initial font size, not the 20px set on
  * html, so a rem breakpoint here would not mean what the rest of the sheet
  * means by rem.
+ *
+ * That also insulates the layout from the reader's text size. The root font
+ * size is a setting now, and a rem breakpoint would move with it - a reader
+ * who chose larger type would silently cross into the desktop layout on a
+ * panel that had not changed width.
  *
  * 900px clears every e-ink panel this is aimed at: the largest of them are
  * around 825 CSS px wide in portrait once device pixel ratio is applied. So a

@@ -11,7 +11,7 @@
  * that works with scripting switched off. The service worker layers offline
  * caching on top; it is never load-bearing.
  */
-import type { EditionSummary, StoryRow } from "~/core/edition";
+import type { EditionSummary, StoryListRow, StoryRow } from "~/core/edition";
 import type { CommentRow } from "~/core/comments";
 import type { ArticleRecord } from "~/core/extract";
 import type { SearchResults } from "~/search/query";
@@ -94,7 +94,7 @@ function SavedMark(props: { href: string }) {
  * from the top of the page, which is what a reader deciding what to open
  * offline is actually doing.
  */
-function StoryRowItem(props: { story: StoryRow; index: number }) {
+function StoryRowItem(props: { story: StoryListRow; index: number }) {
   const { story, index } = props;
   const href = `/story/${story.id}`;
   return (
@@ -103,7 +103,9 @@ function StoryRowItem(props: { story: StoryRow; index: number }) {
         <span class="rank">{index + 1}</span>
         <span class="story-body">
           <span class="story-title">{story.title}</span>
-          <span class="story-meta">{storyMetaParts(story).join(DOT)}</span>
+          <span class="story-meta">
+            {storyMetaParts(story, story.word_count).join(DOT)}
+          </span>
         </span>
         <SavedMark href={href} />
       </a>
@@ -114,7 +116,7 @@ function StoryRowItem(props: { story: StoryRow; index: number }) {
 export interface EditionViewProps {
   date: string;
   today: string;
-  stories: StoryRow[];
+  stories: StoryListRow[];
   /**
    * What the save button is about to spend, estimated from the database by
    * `~/web/size`. Required rather than optional: a button that asks for four
@@ -398,12 +400,20 @@ export function SearchView(props: SearchViewProps) {
                     <span class="story-title">{hit.title}</span>
                     <span class="story-meta">
                       {[
-                        ...storyMetaParts({
-                          domain: hit.domain,
-                          is_text_post: hit.url ? 0 : 1,
-                          points: hit.points,
-                          num_comments: hit.num_comments,
-                        }),
+                        ...storyMetaParts(
+                          {
+                            domain: hit.domain,
+                            is_text_post: hit.url ? 0 : 1,
+                            points: hit.points,
+                            num_comments: hit.num_comments,
+                          },
+                          hit.word_count,
+                        ),
+                        /* The date stays last, after the reading time. It is
+                           the one fact here that the edition list never shows,
+                           because on an edition list every row shares a date;
+                           putting it at the end keeps the first four facts in
+                           the same order on both surfaces. */
                         shortDate(hit.edition_date),
                       ].join(DOT)}
                     </span>

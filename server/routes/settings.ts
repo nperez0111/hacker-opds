@@ -1,9 +1,15 @@
 import { defineHandler } from "nitro/h3";
 import { fontCookie, isFontId } from "~/web/fonts";
 import { isTheme, safeReturnPath, themeCookie } from "~/web/theme";
+import {
+  isLineSpacing,
+  isTextSize,
+  lineSpacingCookie,
+  textSizeCookie,
+} from "~/web/type";
 
 /**
- * `GET /settings?font=<id>&theme=<theme>&to=<path>`
+ * `GET /settings?font=<id>&theme=<theme>&size=<id>&spacing=<id>&to=<path>`
  *
  * The write half of the settings panel. Every option in the panel is a link
  * here; this sets the cookie and sends the reader back to where they were.
@@ -17,10 +23,10 @@ import { isTheme, safeReturnPath, themeCookie } from "~/web/theme";
  * 303 rather than 302, so the response to the redirect is unambiguously a GET,
  * and `no-store` so an intermediary never replays a stale `Set-Cookie`.
  *
- * Both parameters are optional and independent: the panel sets one at a time,
- * but a bookmarked link that sets both works. An unrecognised value is dropped
- * silently rather than echoed anywhere - the redirect target does not carry it,
- * no cookie is written for it, and no error page repeats it back.
+ * Every parameter is optional and independent: the panel sets one at a time,
+ * but a bookmarked link that sets all four works. An unrecognised value is
+ * dropped silently rather than echoed anywhere - the redirect target does not
+ * carry it, no cookie is written for it, and no error page repeats it back.
  */
 export default defineHandler((event) => {
   const params = new URL(event.req.url).searchParams;
@@ -48,6 +54,16 @@ export default defineHandler((event) => {
   const theme = params.get("theme");
   if (theme !== null && isTheme(theme)) {
     headers.append("set-cookie", themeCookie(theme));
+  }
+
+  const size = params.get("size");
+  if (size !== null && isTextSize(size)) {
+    headers.append("set-cookie", textSizeCookie(size));
+  }
+
+  const spacing = params.get("spacing");
+  if (spacing !== null && isLineSpacing(spacing)) {
+    headers.append("set-cookie", lineSpacingCookie(spacing));
   }
 
   return new Response(null, { status: 303, headers });

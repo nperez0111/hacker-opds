@@ -1,12 +1,11 @@
 import { defineHandler } from "nitro/h3";
 import { getEditionStories, listEditions, today } from "~/core/edition";
-import { readFont } from "~/web/fonts";
 import { Shell, pageAttrs } from "~/web/layout";
+import { readPreferences } from "~/web/settings";
 import { longDate } from "~/web/format";
 import { rssEditionPath } from "~/rss/channel";
 import { estimateEditionSave } from "~/web/size";
 import { EditionView, NotFoundView } from "~/web/views";
-import { readTheme } from "~/web/theme";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -21,15 +20,14 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
  * nor the worker caches a page for a day that will never exist.
  */
 export default defineHandler((event) => {
-  const theme = readTheme(event);
-  const font = readFont(event);
+  const prefs = readPreferences(event);
   const date = event.context.params?.date ?? "";
   const known = DATE.test(date) && listEditions(1000).some((e) => e.date === date);
 
   if (!known) {
     return (
-      <html {...pageAttrs({ theme, font, status: 404, cacheControl: "no-store" })}>
-        <Shell title="No such edition" theme={theme} font={font} path="/archive">
+      <html {...pageAttrs({ prefs, status: 404, cacheControl: "no-store" })}>
+        <Shell title="No such edition" prefs={prefs} path="/archive">
           <NotFoundView message={`There is no edition for ${date}.`} />
         </Shell>
       </html>
@@ -39,11 +37,11 @@ export default defineHandler((event) => {
   const stories = getEditionStories(date);
   return (
     <html
-      {...pageAttrs({ theme, font, cacheControl: "public, max-age=86400" })}
+      {...pageAttrs({ prefs, cacheControl: "public, max-age=86400" })}
     >
       <Shell
         title={longDate(date)}
-        theme={theme} font={font}
+        prefs={prefs}
         path="/archive"
         description={`The top ${stories.length} Hacker News stories of ${longDate(date)}.`}
         feed={{ href: rssEditionPath(date), title: `Hacker News \u2014 ${longDate(date)}` }}

@@ -1,8 +1,7 @@
 import { defineHandler } from "nitro/h3";
-import { readFont } from "~/web/fonts";
 import { Shell, pageAttrs } from "~/web/layout";
+import { readPreferences } from "~/web/settings";
 import { OfflineView } from "~/web/views";
-import { readTheme } from "~/web/theme";
 
 /**
  * `GET /offline` - the service worker's last resort.
@@ -15,11 +14,10 @@ import { readTheme } from "~/web/theme";
  * fetched, and its content never changes.
  */
 export default defineHandler((event) => {
-  const theme = readTheme(event);
-  const font = readFont(event);
+  const prefs = readPreferences(event);
   return (
-    <html {...pageAttrs({ theme, font, cacheControl: "public, max-age=86400" })}>
-      <Shell title="Offline" theme={theme} font={font} path="/offline">
+    <html {...pageAttrs({ prefs, cacheControl: "public, max-age=86400" })}>
+      <Shell title="Offline" prefs={prefs} path="/offline">
         <OfflineView />
       </Shell>
     </html>

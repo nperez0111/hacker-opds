@@ -20,15 +20,30 @@ export function plural(n: number, one: string, many = `${one}s`): string {
  * The domain leads. On a list of thirty links the source is the strongest
  * signal available at a glance - far stronger than the score, which mostly
  * says the same thing thirty times over.
+ *
+ * Length comes last, and it is the only fact here that answers a question about
+ * the reader's own afternoon rather than about the story's reception. It is
+ * last rather than first because it is only ever a tiebreak: nobody scans a
+ * list for the shortest thing on it, but plenty of people reach the end of a
+ * row they were already interested in and want to know what they are agreeing
+ * to. Putting it beside the domain would give it the weight of a headline fact
+ * and push the score and comment count off the first line on a narrow panel.
+ *
+ * `words` is optional because two of the three callers - the OPDS and RSS
+ * summaries - reach this function with a story row and no article, and a
+ * required argument would only make them pass a lie.
  */
 export function storyMetaParts(
   story: Pick<StoryRow, "domain" | "is_text_post" | "points" | "num_comments">,
+  words?: number | null,
 ): string[] {
   const parts: string[] = [];
   if (story.domain) parts.push(story.domain);
   else if (story.is_text_post) parts.push("Hacker News");
   parts.push(plural(story.points, "point"));
   parts.push(plural(story.num_comments, "comment"));
+  const minutes = words === null || words === undefined ? null : readingTime(words, "short");
+  if (minutes) parts.push(minutes);
   return parts;
 }
 
@@ -113,9 +128,27 @@ export function byteSize(bytes: number): string {
   return plural(Math.round(n), "byte");
 }
 
-/** Rough reading time. Only shown when extraction actually produced text. */
-export function readingTime(words: number): string | null {
+/**
+ * Rough reading time. Only shown when extraction actually produced text.
+ *
+ * Two spellings of the same number, because it appears in two different kinds
+ * of place. On a story page it stands on its own in a line of facts and has to
+ * say what it is measuring, so it is "5 min read". In a list row it sits at the
+ * end of a meta line that is already four facts long on a 34rem measure, where
+ * the word "read" is both redundant - every other fact on that line is about
+ * the same article - and the five characters that push the line onto a second
+ * row for about half the stories in a typical edition.
+ *
+ * Below a hundred words there is no honest figure to give. That is not a short
+ * article; it is an extraction that failed and left a cookie banner behind, and
+ * "1 min read" would dress that failure up as a fact.
+ */
+export function readingTime(
+  words: number,
+  style: "long" | "short" = "long",
+): string | null {
   if (!Number.isFinite(words) || words < 100) return null;
   // 220 wpm is the usual figure for adult non-fiction reading.
-  return `${Math.max(1, Math.round(words / 220))} min read`;
+  const minutes = Math.max(1, Math.round(words / 220));
+  return style === "short" ? `${minutes} min` : `${minutes} min read`;
 }
