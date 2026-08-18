@@ -5,5 +5,5 @@ import { resolveBase } from "~/opds/origin";
 import { feedResponse } from "~/opds/respond";
 
 export default defineHandler((event) =>
-  feedResponse(buildArchiveFeed(resolveBase(event)), NAVIGATION_TYPE),
+  feedResponse(event, buildArchiveFeed(resolveBase(event)), NAVIGATION_TYPE),
 );

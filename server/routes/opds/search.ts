@@ -27,7 +27,17 @@ export default defineHandler((event) => {
     offset: numberParam(params.get("offset")),
   });
 
-  return feedResponse(searchFeed(results, resolveBase(event)), ACQUISITION_TYPE);
+  /*
+   * The entity tag here has to be the body hash it always was: no column
+   * anywhere records when the answer to a given query last changed, so there is
+   * nothing cheaper to compare. That is fine - a reader paging through results
+   * revalidates the page it is on rather than refetching it.
+   */
+  return feedResponse(
+    event,
+    searchFeed(results, resolveBase(event)),
+    ACQUISITION_TYPE,
+  );
 });
 
 /** Undefined for anything that is not a plain non-negative integer. */

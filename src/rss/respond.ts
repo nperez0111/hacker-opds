@@ -1,18 +1,25 @@
 /**
  * Response helpers for the RSS routes.
  *
- * Split from `~/opds/respond` because both halves of the answer genuinely
- * differ - the caching policy and the conditional-request handling - and
- * folding them together would hide that.
+ * Still split from `~/opds/respond`, but the reason has narrowed. Both used to
+ * differ in two ways - the caching policy and the conditional handling - and
+ * only the first is still true. The conditional half now lives in `~/http`,
+ * because it turned out to be the same answer to the same question and keeping
+ * two copies meant two entity tags that could drift apart in length, in quoting
+ * or in what a 304 carries.
  *
- * The conditional part is not decoration. An OPDS feed is a list of titles and
- * links, a few kilobytes; an RSS feed here is fifty complete articles, which is
- * close to a megabyte. Feed readers poll on their own schedule and many ignore
- * `Cache-Control` entirely, so without an entity tag every reader pulls the
- * whole thing down every time, on a device that is usually on a phone hotspot.
- * With one, an unchanged feed costs a 304 and no body.
+ * What remains here is the policy and the one header the format adds. The size
+ * argument is why this feed got the treatment first: an OPDS feed is a list of
+ * titles and links, a few kilobytes; an RSS feed here is fifty complete
+ * articles, close to a megabyte. Feed readers poll on their own schedule and
+ * many ignore `Cache-Control` entirely, so without an entity tag every reader
+ * pulls the whole thing down every time, on a device that is usually on a phone
+ * hotspot.
  */
 import type { H3Event } from "nitro/h3";
+
+import { conditionalResponse } from "~/http";
+import { originVary } from "~/opds/origin";
 import { renderRss, RSS_TYPE, type RssChannel } from "~/rss/rss";
 
 /**
@@ -35,47 +42,27 @@ export const LATEST_CACHE = "public, max-age=300, must-revalidate";
  */
 export const EDITION_CACHE = "public, max-age=86400";
 
-/**
- * Entity tag over the rendered bytes.
- *
- * Derived from the body rather than from `lastBuild` because the body can move
- * while the newest story does not: an EPUB finishing its build adds an
- * enclosure to an item without changing any timestamp in the feed. A reader
- * holding the enclosure-less copy has to be told it is stale.
- *
- * Half a sha256 is 128 bits, which is comfortably beyond accidental collision
- * and keeps the header short.
- */
-function entityTag(body: string): string {
-  return `"${new Bun.CryptoHasher("sha256").update(body).digest("hex").slice(0, 32)}"`;
-}
-
 export function rssResponse(
   event: H3Event,
   channel: RssChannel,
   cacheControl: string,
 ): Response {
-  const body = renderRss(channel);
-  const etag = entityTag(body);
-
   const headers: Record<string, string> = {
     "content-type": `${RSS_TYPE}; charset=utf-8`,
     "cache-control": cacheControl,
-    etag,
     // HTTP dates are IMF-fixdate and must be GMT, which is not the RFC 822
     // form with a numeric offset that goes inside the feed. Same instant,
     // different spelling, and a reader that gets the offset form here will
     // either ignore the header or fail to parse it.
+    //
+    // Advertised, never honoured - see the note on `conditionalResponse`. The
+    // enclosure case above is exactly why: this feed can change while
+    // `lastBuild` stands still.
     "last-modified": new Date(channel.lastBuild * 1000).toUTCString(),
   };
 
-  // Only If-None-Match. If-Modified-Since is deliberately not honoured: the
-  // enclosure case above means the feed can change while its timestamp does
-  // not, and answering 304 to a date comparison would freeze a reader on a copy
-  // with no books in it.
-  if (event.req.headers.get("if-none-match") === etag) {
-    return new Response(null, { status: 304, headers });
-  }
+  const vary = originVary();
+  if (vary) headers.vary = vary;
 
-  return new Response(body, { headers });
+  return conditionalResponse(event, renderRss(channel), headers);
 }

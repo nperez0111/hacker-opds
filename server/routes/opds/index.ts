@@ -10,5 +10,5 @@ export default defineHandler((event) => {
   const updated = date
     ? rfc3339(new Date(`${date}T00:00:00Z`))
     : rfc3339(new Date(0));
-  return feedResponse(rootFeed(updated, resolveBase(event)), NAVIGATION_TYPE);
+  return feedResponse(event, rootFeed(updated, resolveBase(event)), NAVIGATION_TYPE);
 });

@@ -56,3 +56,24 @@ export function resolveBase(event: H3Event): string {
   if (hasExplicitBaseUrl()) return trimSlashes(config().publicBaseUrl);
   return trimSlashes(requestOrigin(event));
 }
+
+/**
+ * The request headers a feed's body depends on, for `Vary`.
+ *
+ * Null when an explicit base URL is configured, because then the body genuinely
+ * does not vary: every link comes from the config and the request is not
+ * consulted at all. Announcing a dependency that does not exist would split one
+ * cache entry into several for no reason.
+ *
+ * `Host` is not listed even though `requestOrigin` reads it. A cache keys on the
+ * target URI, which includes the host, so it is already part of the key and
+ * naming it again buys nothing. The forwarded pair is different: it is not in
+ * the key, and it changes every absolute URL in the body. An intermediary that
+ * did not know that could hand a reader a catalogue whose every link points at
+ * another deployment - which is precisely the "loads fine, then connection
+ * refused" failure this module exists to prevent, arriving by a different road.
+ */
+export function originVary(): string | null {
+  if (hasExplicitBaseUrl()) return null;
+  return "X-Forwarded-Host, X-Forwarded-Proto";
+}

@@ -19,5 +19,7 @@ export default defineHandler((event) => {
     base: resolveBase(event),
     selfPath: "/opds/today",
   });
-  return feedResponse(feed, ACQUISITION_TYPE);
+  // The short policy, not EDITION_CACHE: this path always means "the newest
+  // edition", so the day a new one lands the bytes behind this URL change.
+  return feedResponse(event, feed, ACQUISITION_TYPE);
 });
