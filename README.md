@@ -8,8 +8,7 @@ comment tree. Each day becomes a digest containing all thirty. Point KOReader,
 Kobo, Boox or Calibre at the OPDS catalogue and the day's reading is already
 waiting on the device.
 
-<!-- Hero screenshot: the front page on an e-reader. -->
-![The front page on a Kobo](docs/screenshots/hero.png)
+![The day's edition on the web](docs/screenshots/hn-opds-home.png)
 
 ## Why
 
@@ -38,40 +37,60 @@ Editions are immutable once built and kept for 90 days.
 
 ## Screenshots
 
-<!--
-Drop PNGs into docs/screenshots/ with these names and they will appear here.
--->
+### The catalogue
 
-### The day's edition
+Every book gets a generated cover: the headline set as large as it fits, the
+source domain, and a band carrying the date and the story's rank that day. They
+are pure black and white with no greys used as design elements, so the
+silhouette still reads in a 120-pixel grid cell on a greyscale panel.
 
-![Front page](docs/screenshots/front-page.png)
+The first tile is the day's complete edition — all thirty stories in one file.
 
-### A story: article, then the discussion
+![The OPDS catalogue in a desktop reader](docs/screenshots/opds-library-view.png)
 
-![Story page](docs/screenshots/story-page.png)
+### Inside a book
 
-### Collapsible comment threads
+Front matter carries the score, the submitter, the source and the word count,
+with the original article and the Hacker News thread linked and their URLs
+printed underneath — a book read offline should still tell you where it came
+from.
 
-Every comment is a native `<details>`. Headers are sticky and stack by depth, so
-the ancestry of whatever you are reading stays on screen and any level can be
-collapsed from where you are. No JavaScript required.
+The table of contents lists the article, then every comment thread lettered from
+A, each labelled with its opening author, a snippet and how many replies it
+holds, so you can pick a thread without reading into it.
 
-![Collapsed comment threads](docs/screenshots/comments-collapsed.png)
+![A story EPUB open in a reader](docs/screenshots/ereader-reading-view.png)
 
-### Settings
+The discussion follows the article in the same file. Depth is marked in each
+comment header, the submitter is highlighted wherever they reply, ages are
+relative to the story's own post time rather than to now, and Hacker News'
+`>` quoting convention is rendered as an actual quote.
 
-Reading font and theme, stored in a cookie, switched by plain links. No
-scripting, no flash of the wrong theme.
+![The comment tree inside the EPUB](docs/screenshots/ereader-comments-view.png)
 
-![Settings panel](docs/screenshots/settings.png)
+### On the device
 
-### Dark mode
+Point KOReader at `/opds` once and the catalogue is there permanently.
 
-![Dark mode](docs/screenshots/dark-mode.png)
+![Adding the catalogue in KOReader](docs/screenshots/koreader-opds-setup.png)
 
-### In KOReader
+![Browsing the catalogue in KOReader](docs/screenshots/koreader-opds-library.png)
 
-![The OPDS catalogue in KOReader](docs/screenshots/koreader-opds.png)
+Covers are generated at 1000×1600 — the aspect Kindle and Kobo expect — so a
+downloaded book looks like a book on the shelf rather than a grey placeholder.
+
+![A generated cover on the device](docs/screenshots/koreader-epub-cover-page.png)
+
+![The discussion on the device](docs/screenshots/koreader-epub-comments-section.png)
+
+### On the web
+
+The website is server-rendered HTML that works with **no JavaScript and no CSS**.
+Comment threads collapse through native `<details>`, with sticky headers that
+stack by depth so the ancestry of whatever you are reading stays on screen and
+any level can be collapsed from where you are. Reading font and light/dark theme
+are stored in a cookie and switched by plain links, so the first byte already
+carries the right theme — no flash, which on e-ink is a full panel refresh.
 
 ## Running it
 
@@ -324,4 +343,8 @@ the SIL Open Font License — subsetted and self-hosted. See
 
 ## License
 
-MIT.
+[MIT](LICENSE).
+
+The code is mine to license. The articles and comments it renders are not — they
+belong to the people who wrote them, and this only reformats them for a device
+that cannot read the web comfortably.
