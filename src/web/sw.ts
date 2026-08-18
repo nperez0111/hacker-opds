@@ -775,14 +775,14 @@ export const APP_JS = `/* hacker-opds */
       if (!summary) return;
 
       /*
-       * The author name links to the comment on Hacker News. A tap on it is a
-       * navigation and the browser does not toggle the details, so there is
-       * nothing to correct and scrolling the page on the way out would be
-       * wrong.
+       * Every part of the header toggles, including the author name, which is
+       * plain text rather than a link to Hacker News for exactly that reason -
+       * see authorName in ~/web/story. There is deliberately no guard for an
+       * anchor inside the summary: there is no longer one to guard against, and
+       * a dead check describing markup that no longer exists is worse than
+       * nothing. The wasOpen comparison below is the real safety net anyway,
+       * since anything that swallows the toggle also cancels the correction.
        */
-      var link = target.closest("a");
-      if (link && summary.contains(link)) return;
-
       var comment = summary.parentNode;
       if (!comment || comment.nodeName !== "DETAILS") return;
       if (!comment.getBoundingClientRect) return;
@@ -813,6 +813,69 @@ export const APP_JS = `/* hacker-opds */
     },
     false
   );
+
+  /*
+   * The floating control that walks down the discussion.
+   *
+   * One rule covers both of the things it has to do. From the article every
+   * thread is below you, so "the first stop below the top edge" is thread A;
+   * from inside the discussion the same phrase means the next thread down. The
+   * two cases in the brief are the same case, and writing them as one is why
+   * there is no state here - no scroll listener, no index to keep in step with
+   * a reader who scrolled by hand or arrived on an anchor.
+   *
+   * The last stop is the block of buttons at the foot of the discussion rather
+   * than the final thread, so the arrow always has somewhere to go and always
+   * goes down. Tapping at the end is then a no-op, which is what running out
+   * should feel like.
+   *
+   * Whether any of this is *shown* is the stylesheet's decision, not this
+   * script's - it is a question about the display hardware, CSS is where that
+   * is asked, and asking it in two places would let the answers drift.
+   */
+  function nextThreadStop(stops) {
+    for (var i = 0; i < stops.length; i += 1) {
+      /*
+       * Strictly below the top edge, with a pixel of slack. Landing exactly on
+       * a thread must not leave that thread as the answer, or the second tap
+       * would never move.
+       */
+      if (stops[i].getBoundingClientRect().top > 1) return stops[i];
+    }
+    return null;
+  }
+
+  var jump = document.querySelector("[data-thread-jump]");
+  if (jump && document.querySelectorAll) {
+    /*
+     * Both halves of the reveal, matching the saved marker: the attribute the
+     * markup shipped with comes off, and the root is flagged for the
+     * stylesheet. Neither is enough alone - the sheet must still be free to
+     * refuse on a device that cannot afford a pinned layer.
+     */
+    jump.removeAttribute("hidden");
+    root.setAttribute("data-thread-jump-ready", "");
+
+    /*
+     * Collected once. The set of top-level threads is fixed for the life of the
+     * page - collapsing a comment changes where they are, not how many there
+     * are - so re-querying per tap would walk a few hundred comments to
+     * rediscover the same twenty sections. The geometry is read fresh on every
+     * tap, which is the part that actually moves.
+     */
+    var stops = document.querySelectorAll(".comments .thread, .comments .actions");
+
+    jump.addEventListener(
+      "click",
+      function () {
+        var stop = nextThreadStop(stops);
+        if (!stop) return;
+        var delta = stop.getBoundingClientRect().top;
+        if (delta) window.scrollBy(0, delta);
+      },
+      false
+    );
+  }
 })();
 
 (function () {

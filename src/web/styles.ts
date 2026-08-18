@@ -785,13 +785,18 @@ summary {
  * stylesheet still indents by class), so one padding step on the reply
  * container produces the whole staircase. The step is small: a 6-inch panel is
  * about 34 characters wide at this type size, so a per-level indent of any real
- * width would leave deep replies as a column two words across. The rule down
- * the left edge is what actually lets you follow a subtree; the depth marker in
- * the header carries the true position.
+ * width would leave deep replies as a column two words across.
+ *
+ * There is no rule down the left edge. There was, and it was carrying the
+ * subtree boundary while the indent only hinted at it - but a 2px grey hairline
+ * is the exact thing the top of this file says not to draw, and stacked five
+ * deep it read as a smear of dither rather than five distinct lines. The indent
+ * plus the pinned ancestor headers already say where you are, and the header
+ * stack says it far more precisely than a line ever did: it names the parents
+ * rather than merely implying them.
  */
 .kids {
   padding-left: 0.75rem;
-  border-left: 2px solid var(--rule-soft);
 }
 
 /*
@@ -800,16 +805,10 @@ summary {
  * depthClass stamps dx on every comment past the cap, so pulling dx back by
  * exactly one step cancels the padding of the container it sits in, at every
  * level. The effect is that the staircase stops dead at the cap however deep
- * the thread goes, which is the same clamp the class-driven indent gave. The
- * border is dropped inside a clamped subtree so it cannot drift right 2px at
- * a time.
+ * the thread goes, which is the same clamp the class-driven indent gave.
  */
 .dx {
   margin-left: -0.75rem;
-}
-
-.dx > .kids {
-  border-left-width: 0;
 }
 
 /*
@@ -908,14 +907,16 @@ summary {
   color: var(--fg);
 }
 
-/* The author name is a link to the comment on HN. It sits inside the summary,
- * so it gets horizontal padding to be hit without catching the toggle. No
- * vertical padding: an inline-block grows the line box, and the header has a
- * fixed height that the sticky offsets depend on. */
-.chead .who {
-  display: inline-block;
-  padding: 0 0.15rem;
-}
+/*
+ * The author name is plain text, and gets no rule of its own.
+ *
+ * It used to be a link to the comment on HN, padded so it could be hit without
+ * catching the toggle. Both of those are now exactly backwards: the name is a
+ * span, the whole header collapses the comment, and the padding was carving a
+ * dead strip out of the widest target in the row. Deleting the rule is the
+ * change - the name inherits the header's colour, and .op below still marks the
+ * submitter.
+ */
 
 /* How much is behind a collapsed toggle. Full strength, because it is the one
  * part of the header that matters once the body is hidden. */
@@ -986,6 +987,99 @@ summary {
  * the label width between stories. */
 .jump {
   font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ */
+/* thread jump                                                         */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A floating control that walks the reader down the discussion, one top-level
+ * thread per tap.
+ *
+ * This is the only position: fixed in the stylesheet, and the rest of this file
+ * spends a paragraph at the top explaining why there are none. The ban is real
+ * and it is not repealed here - it is scoped. A pinned layer forces a repaint
+ * of the region under it on every scroll step, which on a panel with a
+ * hundreds-of-milliseconds refresh is the most expensive thing the page can do.
+ * On a phone it is free. So the button is not shown to devices that cannot
+ * afford it, and the media query below is the whole of that judgement:
+ *
+ *   update: fast   - the panel can repaint quickly. This feature exists in the
+ *                    spec precisely to name e-ink and other slow displays,
+ *                    which report update: slow. It is the only standard signal
+ *                    for the thing being asked about; everything else - screen
+ *                    width, pixel ratio, monochrome - is a proxy that guesses.
+ *   pointer: coarse - the primary input is a fingertip. A desktop pointer has a
+ *                    scrollbar, a keyboard and room on screen, and does not
+ *                    need a thumb-reachable control taking up a corner.
+ *
+ * A browser that has never heard of update does not match, so it gets
+ * nothing. That is the correct direction to fail: the older and stranger the
+ * browser, the more likely it is the hardware this ban was written for, and
+ * every reader who sees no button still has the Comments link in the story
+ * header and the thread anchors in the URL.
+ *
+ * What this cannot detect is an e-ink device running a mainstream Android
+ * browser, which reports update: fast because the browser does not know what
+ * panel it is attached to. Nothing available to CSS distinguishes that case.
+ *
+ * With no stylesheet at all the button is a plain, statically positioned button
+ * at the foot of the discussion - the base rule is the hiding one, so losing
+ * the sheet loses the hiding, not the control. That degrades to something
+ * harmless rather than to a pinned layer on the device that cannot take one.
+ */
+[data-thread-jump] {
+  display: none;
+}
+
+@media (update: fast) and (pointer: coarse) {
+  /*
+   * Gated on the root attribute the page script sets, so the button only
+   * appears once something is able to act on a tap. The markup also ships
+   * the hidden attribute; both halves are needed, because [hidden] is not
+   * reliably in the UA stylesheet on this hardware - the same belt-and-braces
+   * the saved marker uses.
+   */
+  html[data-thread-jump-ready] [data-thread-jump] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    right: 0.9rem;
+    /*
+     * Clear of the browser's own bottom chrome, which on iOS Safari is an
+     * overlay that appears on scroll-up and would otherwise sit on top of this.
+     */
+    bottom: 1.5rem;
+    /*
+     * Above the pinned header stack, which tops out at 6. A thread boundary is
+     * exactly where a pinned ancestor is sliding out, so these do overlap.
+     */
+    z-index: 7;
+    width: var(--tap);
+    height: var(--tap);
+    padding: 0;
+    border: 3px solid var(--bg);
+    /*
+     * The one curve in the stylesheet. Everything else is square because a
+     * dithered arc on a greyscale panel is a ragged edge - which is not a
+     * concern for anything that matches the query above.
+     */
+    border-radius: 50%;
+    background: var(--accent-bg);
+    color: var(--accent-fg);
+    cursor: pointer;
+  }
+}
+
+/*
+ * The arrow. Sized in em so it tracks the button rather than the root font
+ * size, which the reader can change.
+ */
+.thread-jump-icon {
+  width: 1.4em;
+  height: 1.4em;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1070,7 +1164,11 @@ html[data-sw="ready"] p.offline-note[data-offline-ui] {
   .masthead nav,
   .actions,
   .site-foot,
-  .settings {
+  .settings,
+  /* Belt and braces. Print media reports update: none, so the rule that shows
+   * this cannot match anyway - but a control that only exists to scroll has no
+   * business being reachable by a rule this file does not control. */
+  [data-thread-jump] {
     display: none;
   }
 }

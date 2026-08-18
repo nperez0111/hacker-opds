@@ -7,11 +7,15 @@
  * than unwrapping the EPUB output with a regex.
  *
  * What it does not do is reimplement the presentation decisions.
- * `commentBodyHtml` (quotes and footnotes), `authorLink`, `relativeAge`,
- * `threadLabel`, `depthClass` and `stripLeadingHeading` are all imported, so
- * the two surfaces stay in step: if HN quoting conventions or the thread
- * labelling change, they change in one place and both the book and the page
- * follow.
+ * `commentBodyHtml` (quotes and footnotes), `relativeAge`, `threadLabel`,
+ * `depthClass` and `stripLeadingHeading` are all imported, so the two surfaces
+ * stay in step: if HN quoting conventions or the thread labelling change, they
+ * change in one place and both the book and the page follow.
+ *
+ * The one presentation decision that is deliberately *not* shared is the author
+ * name. The book links it to the comment on Hacker News, because a book has no
+ * other way to reach the live discussion. The page renders it as plain text -
+ * see `authorName` for why.
  *
  * The structure does differ, and deliberately. The book is paginated and its
  * comments are flat, indented by the `d1`..`dx` classes. The page nests them in
@@ -25,7 +29,6 @@ import type { StoryRow } from "~/core/edition";
 import type { ArticleRecord } from "~/core/extract";
 import {
   articleErrorText,
-  authorLink,
   commentBodyHtml,
   depthClass,
   relativeAge,
@@ -95,6 +98,32 @@ export function articleByline(article: ArticleRecord | null): string[] {
 }
 
 /**
+ * The author's name, as plain text.
+ *
+ * The book links this to the comment on Hacker News (`authorLink` in
+ * ~/epub/render) and the page used to as well. It does not any more, because on
+ * the page the name sits inside the `<summary>` that collapses the comment, and
+ * an anchor inside a summary wins the click: tapping a name navigated to HN
+ * instead of collapsing the thread. That is the wrong default here. Collapsing
+ * is the thing a reader does constantly while working down a discussion, and
+ * the name is the widest, most obvious target in a header that is only
+ * `--chead-h` tall - so it was the easiest part of the row to hit and the only
+ * part that did not do what the rest of the row does.
+ *
+ * Making it a span hands those pixels back to the toggle and needs no script:
+ * the browser's own `<details>` behaviour does the rest. The discussion is
+ * still one tap away from the top of the page, where the story header has
+ * always carried a "Discussion" button pointing at the same site.
+ *
+ * The class names are unchanged, so the OP marker still styles from one rule
+ * shared with the book's stylesheet.
+ */
+function authorName(author: string | null, isOp: boolean): string {
+  const who = xmlEscape(author ?? "anonymous");
+  return `<span class="${isOp ? "who op" : "who"}">${who}</span>`;
+}
+
+/**
  * One comment and its replies.
  *
  * Every comment is a `<details>`, leaves included. That is the whole
@@ -127,10 +156,11 @@ function commentHtml(
   const bits: string[] = [];
   // No depth marker here, unlike the book. The book's comments are a flat list
   // and "L3" is the only thing placing them in the tree; the page nests them,
-  // so the indent and the rule down the left edge already say it, and the
-  // ancestors are pinned to the top of the viewport besides. Printing it too
-  // would spend a third of a one-line header restating what is on screen.
-  bits.push(authorLink(comment.id, comment.author, isOp, "noreferrer"));
+  // so the indent already says it, and the ancestors are pinned to the top of
+  // the viewport besides - which names them rather than merely counting them.
+  // Printing it too would spend a third of a one-line header restating what is
+  // on screen.
+  bits.push(authorName(comment.author, isOp));
   const age = relativeAge(comment.created_at_i, story.created_at_i);
   if (age) bits.push(xmlEscape(age));
 

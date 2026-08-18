@@ -41,6 +41,7 @@ import {
   NotFoundView,
   OfflineView,
   StoryView,
+  THREAD_JUMP_LABEL,
 } from "~/web/views";
 
 const T0 = 1_755_302_400; // 2025-08-16T00:00:00Z
@@ -1039,6 +1040,48 @@ describe("StoryView", () => {
     const main = await render();
     expect(main).toContain('class="btn jump" href="#comments"');
     expect(main).toContain('class="btn jump" href="#top"');
+  });
+
+  test("ships the thread jump button hidden, for the page script to reveal", async () => {
+    // The server cannot know whether anything will act on a tap, so the
+    // truthful server-rendered state is "not there". Both halves of the guard
+    // are asserted because [hidden] is not reliably in the UA stylesheet on
+    // this hardware, the same reason the saved marker carries both.
+    const main = await render();
+    expect(main).toContain("data-thread-jump");
+    expect(main).toContain("hidden");
+    expect(main).toContain(`aria-label="${THREAD_JUMP_LABEL}"`);
+  });
+
+  test("names the jump button, since its only content is a glyph", async () => {
+    const main = await render();
+    // A title as well as the accessible name: the accessible name reaches a
+    // screen reader, the title reaches a sighted reader who long-presses it.
+    expect(main).toContain(`title="${THREAD_JUMP_LABEL}"`);
+    expect(main).toContain('aria-hidden="true"');
+    expect(main).toContain('viewBox="0 0 24 24"');
+  });
+
+  test("omits the jump button entirely when there is no discussion to walk", async () => {
+    // An inert control is worse than no control.
+    const main = await render({ threads: [] });
+    expect(main).not.toContain("data-thread-jump");
+  });
+
+  test("puts the jump button last, after the discussion it walks", async () => {
+    // It is fixed, so where it sits in the source decides only its reading and
+    // tab order, and a convenience for a thumb must not come before the story.
+    const main = await render();
+    expect(main.indexOf("data-thread-jump")).toBeGreaterThan(
+      main.indexOf("Back to top"),
+    );
+  });
+
+  test("is a button, not a link, because it goes nowhere without script", async () => {
+    // An <a href="#tB"> would work with scripting off but always jump to the
+    // same thread, which is a different feature wearing this one's clothes.
+    const main = await render();
+    expect(main).toContain('<button class="thread-jump" type="button"');
   });
 
   test("heads the comment section with the count, or a bare label when there is none", async () => {

@@ -1192,6 +1192,31 @@ const THREAD_HTML = commentsHtml(STORY, [
 ]);
 
 /**
+ * A whole discussion: three top-level threads inside the section the story page
+ * really wraps them in, followed by the same "Back to top" actions paragraph,
+ * and the jump button as `StoryView` ships it.
+ *
+ * Built from `commentsHtml` for the same reason as above. The button is spelled
+ * out because it comes from a JSX component this file cannot render, and
+ * `tests/web-views.test.tsx` holds the assertion that the real one still
+ * carries these two attributes.
+ */
+const JUMP_HTML =
+  `<section class="comments" id="comments"><h2>3 comments</h2>` +
+  commentsHtml(STORY, [
+    [
+      commentRow({ id: 1, depth: 0, parent_id: null, sort_index: 0, author: "alice" }),
+      commentRow({ id: 2, depth: 1, parent_id: 1, sort_index: 1, author: "bob" }),
+      commentRow({ id: 3, depth: 2, parent_id: 2, sort_index: 2, author: "carol" }),
+    ],
+    [commentRow({ id: 10, root_id: 10, depth: 0, sort_index: 3, author: "dan" })],
+    [commentRow({ id: 20, root_id: 20, depth: 0, sort_index: 4, author: "erin" })],
+  ]) +
+  `<p class="actions"><a class="btn jump" href="#top">Back to top</a></p>` +
+  `</section>` +
+  `<button class="thread-jump" type="button" data-thread-jump hidden></button>`;
+
+/**
  * One function out of the shipped source, by brace counting, so it can be run
  * on its own. Throwing when it is absent makes a rename fail here rather than
  * silently reducing this file to a syntax check.
@@ -1225,6 +1250,7 @@ interface NodeLike {
   dispatchEvent: (event: unknown) => boolean;
   closest?: (selector: string) => DetailsEl | null;
   parentNode?: NodeLike | null;
+  getAttribute?: (name: string) => string | null;
 }
 
 interface ClickOptions {
@@ -1244,6 +1270,10 @@ interface PageOptions {
   details?: boolean;
   /** False models a browser with no requestAnimationFrame. */
   raf?: boolean;
+  /** True renders the full discussion section and the jump button with it. */
+  jump?: boolean;
+  /** Viewport-space top of each jump stop, keyed by id. */
+  stops?: Record<string, number>;
 }
 
 interface Page {
@@ -1260,11 +1290,15 @@ interface Page {
   scrollY: () => number;
   find: (selector: string) => NodeLike;
   click: (target: unknown, options?: ClickOptions) => void;
+  /** The jump button, or null when the page never rendered one. */
+  jump: () => NodeLike | null;
+  /** The <html> element, which is where the reveal writes its marker. */
+  root: () => NodeLike;
 }
 
 function page(opts: PageOptions = {}): Page {
   const { document, Event } = parseHTML(
-    `<!doctype html><html><body>${THREAD_HTML}</body></html>`,
+    `<!doctype html><html><body>${opts.jump ? JUMP_HTML : THREAD_HTML}</body></html>`,
   );
 
   const view = { y: opts.scrollY ?? 0 };
@@ -1280,6 +1314,20 @@ function page(opts: PageOptions = {}): Page {
     const id = el.id;
     el.getBoundingClientRect = () => ({ top: (tops[id] ?? 0) - view.y });
     if (opts.details !== false) el.open = true;
+  }
+
+  /*
+   * The jump stops, in document space like the comments above. The actions
+   * paragraph has no id of its own - it does not need one, nothing links to it
+   * - so it answers to "foot" here.
+   */
+  const stopTops = opts.stops ?? { tA: 200, tB: 900, tC: 1600, foot: 2300 };
+  for (const node of Array.from(
+    document.querySelectorAll(".comments .thread, .comments .actions"),
+  )) {
+    const el = node as unknown as DetailsEl;
+    const key = el.id || "foot";
+    el.getBoundingClientRect = () => ({ top: (stopTops[key] ?? 0) - view.y });
   }
 
   const doc = document as unknown as {
@@ -1363,6 +1411,8 @@ function page(opts: PageOptions = {}): Page {
       if (!node) throw new Error(`no ${selector} in the rendered thread`);
       return node as NodeLike;
     },
+    jump: () => (realQuery("[data-thread-jump]") as NodeLike | null) ?? null,
+    root: () => document.documentElement as unknown as NodeLike,
     click: (target, options = {}) => {
       (target as NodeLike).dispatchEvent(new Event("click", { bubbles: true }));
 
@@ -1408,15 +1458,24 @@ describe("APP_JS - scroll correction, as written", () => {
     // measurable cost on this hardware for something most readers never tap.
     expect(APP_JS).toContain('document.addEventListener(\n    "click",');
     expect(APP_JS).toContain('closest("summary.chead")');
-    expect(SCROLL_CODE).not.toContain("querySelectorAll");
     expect(SCROLL_CODE.length).toBeGreaterThan(0);
   });
 
-  test("excludes the author link inside the header", () => {
-    // The name links to the comment on HN. The browser does not toggle for it,
-    // so scrolling the page on the way out would be wrong.
-    expect(APP_JS).toContain('closest("a")');
-    expect(APP_JS).toContain("summary.contains(link)");
+  test("never enumerates comments, only top-level threads", () => {
+    // The reason there is no per-comment registration in the first place. The
+    // thread jump is allowed one bounded query because the set it collects is
+    // the handful of thread sections, not the comments inside them.
+    const queries = SCROLL_CODE.match(/querySelectorAll\([^)]*\)/g) ?? [];
+    expect(queries).toEqual([
+      'querySelectorAll(".comments .thread, .comments .actions")',
+    ]);
+  });
+
+  test("does not exempt anything inside the header from toggling", () => {
+    // The author name used to be a link to HN and had to be skipped. It is a
+    // span now, so the exemption is gone and every part of the row collapses.
+    expect(SCROLL_CODE).not.toContain('closest("a")');
+    expect(SCROLL_CODE).not.toContain("summary.contains(link)");
   });
 
   test("measures the details, never the sticky summary", () => {
@@ -1572,15 +1631,15 @@ describe("APP_JS - scroll correction, executed", () => {
     expect(p.topOf("c2")).toBe(CHEAD_H);
   });
 
-  test("stays out of the way of the author link", () => {
-    // Tapping the name is a navigation to HN. Nothing toggles, so nothing may
-    // scroll - and the correction must not even be scheduled.
+  test("corrects a click on the author name, which now collapses like the rest", () => {
+    // The name was a link to HN and was skipped for that reason. It is a span
+    // now and toggles like any other part of the header, so it gets the same
+    // correction - and it is the widest target in the row, so this is the path
+    // most taps take.
     const p = page({ scrollY: 3000 });
-    p.click(p.find("#c2 > summary.chead > a.who"), { toggles: false });
+    p.click(p.find("#c2 > summary.chead > span.who"));
 
-    expect(p.pending()).toBe(0);
-    expect(p.scrolls).toEqual([]);
-    expect(p.scrollY()).toBe(3000);
+    expect(p.topOf("c2")).toBe(CHEAD_H);
   });
 
   test("ignores clicks in the comment body", () => {
@@ -1617,11 +1676,14 @@ describe("APP_JS - scroll correction, executed", () => {
     expect(p.topOf("c2")).toBe(CHEAD_H);
   });
 
-  test("binds one listener, on the document, and enumerates nothing", () => {
+  test("binds one listener on the document and looks up one element", () => {
+    // The collapse half enumerates nothing at all - that is what delegation
+    // buys. The one lookup is the jump button, which has to be found before it
+    // can be ruled out.
     const p = page();
 
     expect(p.registrations).toEqual(["click"]);
-    expect(p.selectors).toEqual([]);
+    expect(p.selectors).toEqual(["[data-thread-jump]"]);
   });
 
   test("runs on a browser with no service worker", () => {
@@ -1631,6 +1693,96 @@ describe("APP_JS - scroll correction, executed", () => {
     p.click(p.find("#c1 > summary.chead"));
 
     expect(p.topOf("c1")).toBe(0);
+  });
+});
+
+describe("APP_JS - the thread jump button", () => {
+  test("stays hidden and inert on a page that renders no button", () => {
+    // Every page but a story page. The lookup misses and nothing else happens.
+    const p = page();
+
+    expect(p.jump()).toBeNull();
+    expect(p.registrations).toEqual(["click"]);
+  });
+
+  test("reveals the button it finds, and marks the root for the stylesheet", () => {
+    // Two halves of one gate. The attribute is what the media query keys off,
+    // so a desktop or e-ink reader gets the markup and still sees nothing.
+    const p = page({ jump: true });
+
+    expect(p.jump()?.getAttribute("hidden")).toBeNull();
+    expect(p.root().getAttribute("data-thread-jump-ready")).toBe("");
+  });
+
+  test("moves to the first thread below the fold", () => {
+    // Reading the article: every thread is ahead, so the answer is the first.
+    const p = page({ jump: true, scrollY: 0 });
+    p.click(p.jump(), { toggles: false });
+
+    expect(p.scrolls).toEqual([200]);
+  });
+
+  test("moves to the next thread, not back to the first", () => {
+    // Sitting on tB. tA is behind and tB is level, so tC is the only answer.
+    const p = page({ jump: true, stops: { tA: -700, tB: 0, tC: 900, foot: 1600 } });
+    p.click(p.jump(), { toggles: false });
+
+    expect(p.scrolls).toEqual([900]);
+  });
+
+  test("lands a thread exactly where its fragment link would", () => {
+    // #tB already works with scripting off, and the button must not disagree
+    // with it: no headroom, no offset, the same top edge. A depth-0 header pins
+    // at top 0 anyway, so there is nothing above it to clear.
+    const p = page({ jump: true, stops: { tA: 500, tB: 1200, tC: 1900, foot: 2600 } });
+    p.click(p.jump(), { toggles: false });
+
+    expect(p.scrolls).toEqual([500]);
+  });
+
+  test("finishes at the foot of the discussion rather than stopping dead", () => {
+    // Past the last thread the remaining stop is the actions paragraph, so the
+    // last tap reaches the end of the page instead of doing nothing.
+    const p = page({ jump: true, stops: { tA: -900, tB: -600, tC: -300, foot: 400 } });
+    p.click(p.jump(), { toggles: false });
+
+    expect(p.scrolls).toEqual([400]);
+  });
+
+  test("does nothing at all once there is nothing left below", () => {
+    const p = page({ jump: true, stops: { tA: -900, tB: -600, tC: -300, foot: -50 } });
+    p.click(p.jump(), { toggles: false });
+
+    expect(p.scrolls).toEqual([]);
+  });
+
+  test("never scrolls upward, whatever the geometry says", () => {
+    // The guard behind the "strictly below" rule. A stop at 0 or above is
+    // behind the reader, and moving back would make the button unusable.
+    const p = page({ jump: true, stops: { tA: 0, tB: 1, tC: 900, foot: 1600 } });
+    p.click(p.jump(), { toggles: false });
+
+    for (const delta of p.scrolls) expect(delta).toBeGreaterThan(0);
+  });
+
+  test("collects the thread list once, not on every tap", () => {
+    // The set never changes; only its geometry does. Re-querying per tap would
+    // walk every comment on the page to rediscover the same three sections.
+    const p = page({ jump: true });
+    p.click(p.jump(), { toggles: false });
+    p.click(p.jump(), { toggles: false });
+
+    const all = p.selectors.filter((s) => s.indexOf(".thread") !== -1);
+    expect(all).toHaveLength(1);
+  });
+
+  test("does not touch the comment collapse listener", () => {
+    // Both live in the same IIFE. Collapsing must keep working on a page that
+    // has a button, and the button must not ride on the collapse delegation.
+    const p = page({ jump: true, scrollY: 3000 });
+    p.click(p.find("#c2 > summary.chead"));
+
+    expect(p.topOf("c2")).toBe(CHEAD_H);
   });
 });
 

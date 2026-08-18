@@ -397,7 +397,7 @@ describe("commentsHtml - submitter", () => {
   test("marks a comment by the story's submitter", () => {
     const html = commentsHtml(story({ author: "ingve" }), [[comment({ author: "ingve" })]]);
     expect(html).toContain('class="who op"');
-    expect(html).toContain(">ingve</a>");
+    expect(html).toContain(">ingve</span>");
   });
 
   test("leaves everyone else unmarked", () => {
@@ -568,17 +568,37 @@ describe("commentsHtml - collapsible tree", () => {
   });
 });
 
-describe("commentsHtml - author links", () => {
-  test("links the author name to that comment on Hacker News", () => {
+describe("commentsHtml - author names", () => {
+  test("renders the name as plain text, not a link", () => {
+    // An anchor inside the summary wins the click, so tapping a name navigated
+    // to HN instead of collapsing the comment. The whole header is the toggle.
     const html = commentsHtml(story(), [[comment({ id: 4242, author: "alice" })]]);
-    expect(html).toContain(`href="${HN_ITEM}4242"`);
-    expect(html).toContain(">alice</a>");
-    expect(html).toContain('rel="noreferrer"');
+    expect(html).toContain('<span class="who">alice</span>');
+    expect(html).not.toContain(`href="${HN_ITEM}4242"`);
   });
 
-  test("uses the comment id, not the story id", () => {
+  test("puts no anchor of any kind inside a comment header", () => {
+    // The guard for the whole feature: one link anywhere in the summary takes
+    // the toggle back, wherever it came from.
+    const html = commentsHtml(story(), [[comment({ id: 4242, author: "alice" })]]);
+    const heads = html.match(/<summary class="chead">[\s\S]*?<\/summary>/g) ?? [];
+    expect(heads).toHaveLength(1);
+    for (const head of heads) expect(head).not.toContain("<a ");
+  });
+
+  test("still anchors the comment by its own id, so deep links survive", () => {
+    // Dropping the link must not drop the address. /story/1#c999 is how a
+    // thread gets shared, and it is the id on the details that carries it.
     const html = commentsHtml(story({ id: 1 }), [[comment({ id: 999 })]]);
-    expect(html).toContain(`href="${HN_ITEM}999"`);
+    expect(html).toContain('id="c999"');
+  });
+
+  test("escapes a hostile name rather than emitting markup", () => {
+    const html = commentsHtml(story(), [
+      [comment({ author: '"><script>alert(1)</script>' })],
+    ]);
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
   });
 });
 
@@ -717,6 +737,15 @@ describe("SITE_CSS - collapsible comments", () => {
     expect(SITE_CSS).toMatch(/\.dx \{[^}]*margin-left: -0\.75rem/);
   });
 
+  test("carries the nesting on the indent alone, with no rule down the edge", () => {
+    // The repo owner's call: the indent already says it. A 2px rule per level
+    // is also six vertical lines on a deep subthread, each one a dithered
+    // hairline on the panel this site is for.
+    const kids = /\n\.kids \{[^}]*\}/.exec(SITE_CSS)?.[0] ?? "";
+    expect(kids).not.toContain("border-left");
+    expect(SITE_CSS).not.toContain(".dx > .kids");
+  });
+
   test("keeps the header tappable without the disclosure marker being clipped", () => {
     // The header is shorter than --tap on purpose: six pinned ancestors at 48px
     // would eat a third of a 6-inch panel. It stays easy to hit because the row
@@ -782,5 +811,101 @@ describe("SITE_CSS - page layout", () => {
     for (let i = 1; i < wraps.length; i++) {
       expect(wraps[i]!).toBeGreaterThan(wraps[i - 1]!);
     }
+  });
+});
+
+/**
+ * The one pinned element in the stylesheet, and the guard that keeps it off the
+ * hardware the ban was written for.
+ *
+ * These tests are the ban. The module doc at the top of the stylesheet says
+ * there is no position: fixed; there is now exactly one, and the only thing
+ * stopping the next one is this file.
+ */
+describe("SITE_CSS - the thread jump button", () => {
+  /** Declarations only. The prose above these rules discusses them by name. */
+  const RULES = SITE_CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  test("pins nothing outside the query that says the device can afford it", () => {
+    const gate = "@media (update: fast) and (pointer: coarse) {";
+    const start = RULES.indexOf(gate);
+    expect(start).toBeGreaterThan(-1);
+
+    // Walk the braces to find where the media block actually ends, rather than
+    // trusting the next closing brace, which is the inner rule's.
+    let depth = 0;
+    let end = start;
+    for (let i = start + gate.length - 1; i < RULES.length; i++) {
+      if (RULES[i] === "{") depth++;
+      else if (RULES[i] === "}" && --depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    expect(end).toBeGreaterThan(start);
+
+    const pins = [...RULES.matchAll(/position:\s*fixed/g)].map((m) => m.index!);
+    expect(pins.length).toBe(1);
+    for (const at of pins) {
+      expect(at).toBeGreaterThan(start);
+      expect(at).toBeLessThan(end);
+    }
+  });
+
+  test("asks whether the panel is fast, not how wide it is", () => {
+    // update: fast is the only standard signal for "this display can repaint
+    // cheaply". Width, pixel ratio and monochrome are proxies that guess, and
+    // they guess wrong on exactly the devices that matter.
+    expect(RULES).toContain("@media (update: fast) and (pointer: coarse)");
+  });
+
+  test("fails closed: a browser that has never heard of update gets nothing", () => {
+    // The base rule hides. A browser that cannot parse the query drops the
+    // block that shows, so the older and stranger the browser, the more surely
+    // it sees no pinned layer.
+    expect(RULES).toMatch(/\[data-thread-jump\] \{\s*display: none;\s*\}/);
+  });
+
+  test("waits for the script before showing a control only script can serve", () => {
+    expect(RULES).toContain("html[data-thread-jump-ready] [data-thread-jump]");
+  });
+
+  test("gives the button a full tap target and the only curve in the sheet", () => {
+    const rule =
+      /html\[data-thread-jump-ready\] \[data-thread-jump\] \{[^}]*\}/.exec(RULES)?.[0] ??
+      "";
+    expect(rule).toContain("width: var(--tap)");
+    expect(rule).toContain("height: var(--tap)");
+    expect(rule).toContain("border-radius: 50%");
+    // Everything else in the sheet is square; a dithered arc is a ragged edge
+    // on greyscale, which is not a concern for anything matching the query.
+    expect([...RULES.matchAll(/border-radius: (?!0)/g)]).toHaveLength(1);
+  });
+
+  test("sits above the pinned header stack it will overlap", () => {
+    // A thread boundary is exactly where a pinned ancestor slides out, so the
+    // two do meet. The header stack tops out at 6.
+    const rule =
+      /html\[data-thread-jump-ready\] \[data-thread-jump\] \{[^}]*\}/.exec(RULES)?.[0] ??
+      "";
+    const z = Number(/z-index: (\d+)/.exec(rule)?.[1]);
+    const heads = [...RULES.matchAll(/> \.chead \{[^}]*z-index: (\d+)/g)].map((m) =>
+      Number(m[1]),
+    );
+    expect(heads.length).toBeGreaterThan(0);
+    for (const h of heads) expect(z).toBeGreaterThan(h);
+  });
+
+  test("keeps its own promise about transitions", () => {
+    const rule =
+      /html\[data-thread-jump-ready\] \[data-thread-jump\] \{[^}]*\}/.exec(RULES)?.[0] ??
+      "";
+    expect(rule).not.toContain("transition");
+    expect(rule).not.toContain("box-shadow");
+  });
+
+  test("is not printed", () => {
+    const print = /@media print \{[\s\S]*?\n\}/.exec(RULES)?.[0] ?? "";
+    expect(print).toContain("[data-thread-jump]");
   });
 });

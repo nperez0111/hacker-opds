@@ -314,7 +314,67 @@ export function StoryView(props: StoryViewProps) {
           </a>
         </p>
       </section>
+
+      {/*
+        Walks down the discussion a thread at a time. Last in the document
+        rather than first, so it comes last in the reading and tab orders: it
+        is a convenience for a thumb, not a landmark, and it must not sit
+        between the reader and the story. Being fixed, where it appears on
+        screen owes nothing to where it sits here.
+
+        Shipped hidden and revealed by the page script; a reader with no
+        scripting sees nothing, which is right, because nothing would happen if
+        they tapped it. The stylesheet decides separately whether the device
+        can afford a pinned layer at all - see the thread jump section there.
+
+        Omitted entirely when there is nothing to walk: with no threads the
+        control would be inert, and an inert control is worse than none.
+      */}
+      {threads.length > 0 ? <ThreadJump /> : null}
     </>
+  );
+}
+
+/** Label for the floating control, and its accessible name. */
+export const THREAD_JUMP_LABEL = "Next comment thread";
+
+/**
+ * The floating thread control.
+ *
+ * An inline SVG rather than a text arrow because this one is a glyph on its own
+ * in the middle of a circle, at a size where a font's own arrow would sit off
+ * centre by a hairline that is visible at this scale. The saved marker uses a
+ * text arrow precisely because it sits *in* a line of text and has to share its
+ * metrics.
+ *
+ * Stroked rather than filled, and with round caps, so it stays even-weighted at
+ * any size the reader's type setting produces.
+ */
+function ThreadJump() {
+  return (
+    <button
+      class="thread-jump"
+      type="button"
+      data-thread-jump
+      aria-label={THREAD_JUMP_LABEL}
+      title={THREAD_JUMP_LABEL}
+      hidden
+    >
+      <svg
+        class="thread-jump-icon"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path d="M12 4v15" />
+        <path d="M5 12l7 7 7-7" />
+      </svg>
+    </button>
   );
 }
 
