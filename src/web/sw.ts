@@ -815,31 +815,29 @@ export const APP_JS = `/* hacker-opds */
   );
 
   /*
-   * The floating control that walks down the discussion.
+   * The floating control that walks through the discussion.
    *
-   * One rule covers both of the things it has to do. From the article every
-   * thread is below you, so "the first stop below the top edge" is thread A;
-   * from inside the discussion the same phrase means the next thread down. The
-   * two cases in the brief are the same case, and writing them as one is why
-   * there is no state here - no scroll listener, no index to keep in step with
-   * a reader who scrolled by hand or arrived on an anchor.
+   * One rule covers every case in each direction. Going forward, from the
+   * article every thread is below you, so "the first stop below the top edge"
+   * is thread A; from inside the discussion the same phrase means the next
+   * thread down. Going back, "the last stop above the top edge" is the thread
+   * you just came from wherever you happen to be standing. Writing each
+   * direction as a single sentence is why there is no state here - no scroll
+   * listener, no index to keep in step with a reader who scrolled by hand or
+   * arrived on an anchor.
    *
-   * The last stop is the block of buttons at the foot of the discussion rather
-   * than the final thread, so the arrow always has somewhere to go and always
-   * goes down. Tapping at the end is then a no-op, which is what running out
-   * should feel like.
-   *
-   * Whether any of this is *shown* is the stylesheet's decision, not this
-   * script's - it is a question about the display hardware, CSS is where that
-   * is asked, and asking it in two places would let the answers drift.
+   * The pixel of slack is what stops a stop you are already parked on from
+   * being its own answer, in either direction.
    */
-  function nextThreadStop(stops) {
-    for (var i = 0; i < stops.length; i += 1) {
-      /*
-       * Strictly below the top edge, with a pixel of slack. Landing exactly on
-       * a thread must not leave that thread as the answer, or the second tap
-       * would never move.
-       */
+  function threadStop(stops, back) {
+    var i;
+    if (back) {
+      for (i = stops.length - 1; i >= 0; i -= 1) {
+        if (stops[i].getBoundingClientRect().top < -1) return stops[i];
+      }
+      return null;
+    }
+    for (i = 0; i < stops.length; i += 1) {
       if (stops[i].getBoundingClientRect().top > 1) return stops[i];
     }
     return null;
@@ -857,18 +855,47 @@ export const APP_JS = `/* hacker-opds */
     root.setAttribute("data-thread-jump-ready", "");
 
     /*
-     * Collected once. The set of top-level threads is fixed for the life of the
-     * page - collapsing a comment changes where they are, not how many there
-     * are - so re-querying per tap would walk a few hundred comments to
-     * rediscover the same twenty sections. The geometry is read fresh on every
-     * tap, which is the part that actually moves.
+     * Two lists, because the directions do not share their far ends.
+     *
+     * Forward stops at the block of buttons under the last thread rather than
+     * at the thread itself, so the arrow always has somewhere to go and always
+     * goes down, and the reader is left looking at Back to top rather than at
+     * the tail of an argument.
+     *
+     * Back stops at the story header, so a reader who came down through a long
+     * article can get to the top of it without a hundred page turns - the
+     * masthead does not stay on screen and there is no other way up. It does
+     * not include the foot block: from the very bottom of the page the useful
+     * answer is the last thread, not the buttons a few lines above.
+     *
+     * Both are collected once. The set of top-level threads is fixed for the
+     * life of the page - collapsing a comment changes where they are, not how
+     * many there are - so re-querying per tap would walk a few hundred comments
+     * to rediscover the same twenty sections. The geometry is read fresh on
+     * every tap, which is the part that actually moves.
      */
-    var stops = document.querySelectorAll(".comments .thread, .comments .actions");
+    var ahead = document.querySelectorAll(".comments .thread, .comments .actions");
+    var behind = document.querySelectorAll(".story-head, .comments .thread");
 
+    /*
+     * Delegated from the box rather than bound to each button, matching the
+     * comment headers above. It is also the only thing that works: the tap
+     * lands on the SVG, or on a path inside it, so the handler has to walk up
+     * to find which arrow was hit whatever it is attached to.
+     */
     jump.addEventListener(
       "click",
-      function () {
-        var stop = nextThreadStop(stops);
+      function (event) {
+        var target = event.target;
+        /* Old WebKit can report a text node as the target of a click. */
+        if (target && target.nodeType === 3) target = target.parentNode;
+        if (!target || !target.closest) return;
+
+        var arrow = target.closest("[data-thread-jump-to]");
+        if (!arrow) return;
+
+        var back = arrow.getAttribute("data-thread-jump-to") === "prev";
+        var stop = threadStop(back ? behind : ahead, back);
         if (!stop) return;
         var delta = stop.getBoundingClientRect().top;
         if (delta) window.scrollBy(0, delta);

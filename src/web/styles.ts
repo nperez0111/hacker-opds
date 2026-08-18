@@ -994,25 +994,30 @@ summary {
 /* ------------------------------------------------------------------ */
 
 /*
- * A floating control that walks the reader down the discussion, one top-level
- * thread per tap.
+ * A floating control that walks the reader through the discussion, one
+ * top-level thread per tap, in either direction.
  *
  * This is the only position: fixed in the stylesheet, and the rest of this file
  * spends a paragraph at the top explaining why there are none. The ban is real
  * and it is not repealed here - it is scoped. A pinned layer forces a repaint
  * of the region under it on every scroll step, which on a panel with a
  * hundreds-of-milliseconds refresh is the most expensive thing the page can do.
- * On a phone it is free. So the button is not shown to devices that cannot
- * afford it, and the media query below is the whole of that judgement:
+ * On any other display it is free. So the button is not shown to devices that
+ * cannot afford it, and the media query below is the whole of that judgement:
  *
- *   update: fast   - the panel can repaint quickly. This feature exists in the
- *                    spec precisely to name e-ink and other slow displays,
- *                    which report update: slow. It is the only standard signal
- *                    for the thing being asked about; everything else - screen
- *                    width, pixel ratio, monochrome - is a proxy that guesses.
- *   pointer: coarse - the primary input is a fingertip. A desktop pointer has a
- *                    scrollbar, a keyboard and room on screen, and does not
- *                    need a thumb-reachable control taking up a corner.
+ *   update: fast - the panel can repaint quickly. This feature exists in the
+ *                  spec precisely to name e-ink and other slow displays, which
+ *                  report update: slow. It is the only standard signal for the
+ *                  thing being asked about; everything else - screen width,
+ *                  pixel ratio, monochrome - is a proxy that guesses.
+ *
+ * That is the only clause. An earlier draft also required pointer: coarse, on
+ * the reasoning that a desktop has a scrollbar and room to spare - but the cost
+ * this rule exists to avoid is a repaint, not a tap, and a mouse pays no more
+ * for a pinned corner than a thumb does. A long discussion is long on a laptop
+ * too, and the scrollbar is a worse instrument for it than a control that knows
+ * where the thread boundaries are. Gating on the input device answered a
+ * question nobody was asking.
  *
  * A browser that has never heard of update does not match, so it gets
  * nothing. That is the correct direction to fail: the older and stranger the
@@ -1033,7 +1038,7 @@ summary {
   display: none;
 }
 
-@media (update: fast) and (pointer: coarse) {
+@media (update: fast) {
   /*
    * Gated on the root attribute the page script sets, so the button only
    * appears once something is able to act on a tap. The markup also ships
@@ -1043,8 +1048,13 @@ summary {
    */
   html[data-thread-jump-ready] [data-thread-jump] {
     display: flex;
-    align-items: center;
-    justify-content: center;
+    /*
+     * Back on the left, on the right, in source order. Half a tap between them
+     * so a thumb aiming for one does not carry into the other - the two do
+     * opposite things, and this is the one place on the page where a mis-tap
+     * undoes the tap before it.
+     */
+    gap: 0.5rem;
     position: fixed;
     right: 0.9rem;
     /*
@@ -1057,20 +1067,31 @@ summary {
      * exactly where a pinned ancestor is sliding out, so these do overlap.
      */
     z-index: 7;
-    width: var(--tap);
-    height: var(--tap);
-    padding: 0;
-    border: 3px solid var(--bg);
-    /*
-     * The one curve in the stylesheet. Everything else is square because a
-     * dithered arc on a greyscale panel is a ragged edge - which is not a
-     * concern for anything that matches the query above.
-     */
-    border-radius: 50%;
-    background: var(--accent-bg);
-    color: var(--accent-fg);
-    cursor: pointer;
   }
+}
+
+/*
+ * The circles themselves, outside the query on purpose: they only ever paint
+ * inside a box the rule above has to switch on first, so gating them again
+ * would state the same condition twice and let the two copies disagree.
+ */
+.thread-jump-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  padding: 0;
+  border: 3px solid var(--bg);
+  /*
+   * The one curve in the stylesheet. Everything else is square because a
+   * dithered arc on a greyscale panel is a ragged edge - which is not a
+   * concern for anything that matches the query above.
+   */
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+  cursor: pointer;
 }
 
 /*
@@ -1080,6 +1101,12 @@ summary {
 .thread-jump-icon {
   width: 1.4em;
   height: 1.4em;
+  /*
+   * So a tap reports the button, not the glyph. The script can walk up from an
+   * SVG child and does, but only on a browser whose SVG elements carry closest;
+   * this makes that walk a fallback rather than the mechanism.
+   */
+  pointer-events: none;
 }
 
 /* ------------------------------------------------------------------ */

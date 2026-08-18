@@ -41,7 +41,8 @@ import {
   NotFoundView,
   OfflineView,
   StoryView,
-  THREAD_JUMP_LABEL,
+  THREAD_NEXT_LABEL,
+  THREAD_PREV_LABEL,
 } from "~/web/views";
 
 const T0 = 1_755_302_400; // 2025-08-16T00:00:00Z
@@ -1042,7 +1043,7 @@ describe("StoryView", () => {
     expect(main).toContain('class="btn jump" href="#top"');
   });
 
-  test("ships the thread jump button hidden, for the page script to reveal", async () => {
+  test("ships the thread jump control hidden, for the page script to reveal", async () => {
     // The server cannot know whether anything will act on a tap, so the
     // truthful server-rendered state is "not there". Both halves of the guard
     // are asserted because [hidden] is not reliably in the UA stylesheet on
@@ -1050,25 +1051,45 @@ describe("StoryView", () => {
     const main = await render();
     expect(main).toContain("data-thread-jump");
     expect(main).toContain("hidden");
-    expect(main).toContain(`aria-label="${THREAD_JUMP_LABEL}"`);
   });
 
-  test("names the jump button, since its only content is a glyph", async () => {
+  test("offers both directions, back before forward", async () => {
+    // Source order is reading order and tab order, and it is what the
+    // stylesheet's flex row turns into left-to-right.
+    const main = await render();
+    expect(main).toContain('data-thread-jump-to="prev"');
+    expect(main).toContain('data-thread-jump-to="next"');
+    expect(main.indexOf('data-thread-jump-to="prev"')).toBeLessThan(
+      main.indexOf('data-thread-jump-to="next"'),
+    );
+  });
+
+  test("names each arrow, since their only content is a glyph", async () => {
     const main = await render();
     // A title as well as the accessible name: the accessible name reaches a
     // screen reader, the title reaches a sighted reader who long-presses it.
-    expect(main).toContain(`title="${THREAD_JUMP_LABEL}"`);
+    for (const label of [THREAD_PREV_LABEL, THREAD_NEXT_LABEL]) {
+      expect(main).toContain(`aria-label="${label}"`);
+      expect(main).toContain(`title="${label}"`);
+    }
     expect(main).toContain('aria-hidden="true"');
     expect(main).toContain('viewBox="0 0 24 24"');
   });
 
-  test("omits the jump button entirely when there is no discussion to walk", async () => {
+  test("draws the two arrows as mirrors of each other", async () => {
+    // One control turned around, not two unrelated icons.
+    const main = await render();
+    expect(main).toContain('d="M5 12l7-7 7 7"');
+    expect(main).toContain('d="M5 12l7 7 7-7"');
+  });
+
+  test("omits the jump control entirely when there is no discussion to walk", async () => {
     // An inert control is worse than no control.
     const main = await render({ threads: [] });
     expect(main).not.toContain("data-thread-jump");
   });
 
-  test("puts the jump button last, after the discussion it walks", async () => {
+  test("puts the jump control last, after the discussion it walks", async () => {
     // It is fixed, so where it sits in the source decides only its reading and
     // tab order, and a convenience for a thumb must not come before the story.
     const main = await render();
@@ -1077,11 +1098,12 @@ describe("StoryView", () => {
     );
   });
 
-  test("is a button, not a link, because it goes nowhere without script", async () => {
+  test("uses buttons, not links, because they go nowhere without script", async () => {
     // An <a href="#tB"> would work with scripting off but always jump to the
     // same thread, which is a different feature wearing this one's clothes.
     const main = await render();
-    expect(main).toContain('<button class="thread-jump" type="button"');
+    expect(main).toContain('<div class="thread-jump" data-thread-jump');
+    expect(main).toContain('<button class="thread-jump-btn" type="button"');
   });
 
   test("heads the comment section with the count, or a bare label when there is none", async () => {

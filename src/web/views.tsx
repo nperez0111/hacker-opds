@@ -335,11 +335,12 @@ export function StoryView(props: StoryViewProps) {
   );
 }
 
-/** Label for the floating control, and its accessible name. */
-export const THREAD_JUMP_LABEL = "Next comment thread";
+/** Accessible names for the two halves of the floating control. */
+export const THREAD_PREV_LABEL = "Previous comment thread";
+export const THREAD_NEXT_LABEL = "Next comment thread";
 
 /**
- * The floating thread control.
+ * One arrow.
  *
  * An inline SVG rather than a text arrow because this one is a glyph on its own
  * in the middle of a circle, at a size where a font's own arrow would sit off
@@ -348,17 +349,18 @@ export const THREAD_JUMP_LABEL = "Next comment thread";
  * metrics.
  *
  * Stroked rather than filled, and with round caps, so it stays even-weighted at
- * any size the reader's type setting produces.
+ * any size the reader's type setting produces. The two paths are mirrors of
+ * each other about the horizontal, so the pair reads as one control turned
+ * around rather than as two unrelated icons.
  */
-function ThreadJump() {
+function ThreadArrow(props: { back: boolean; label: string }) {
   return (
     <button
-      class="thread-jump"
+      class="thread-jump-btn"
       type="button"
-      data-thread-jump
-      aria-label={THREAD_JUMP_LABEL}
-      title={THREAD_JUMP_LABEL}
-      hidden
+      data-thread-jump-to={props.back ? "prev" : "next"}
+      aria-label={props.label}
+      title={props.label}
     >
       <svg
         class="thread-jump-icon"
@@ -371,10 +373,36 @@ function ThreadJump() {
         aria-hidden="true"
         focusable="false"
       >
-        <path d="M12 4v15" />
-        <path d="M5 12l7 7 7-7" />
+        <path d={props.back ? "M12 20V5" : "M12 4v15"} />
+        <path d={props.back ? "M5 12l7-7 7 7" : "M5 12l7 7 7-7"} />
       </svg>
     </button>
+  );
+}
+
+/**
+ * The floating thread control: back a thread, on a thread.
+ *
+ * One pinned box holding two buttons rather than two pinned boxes, because the
+ * cost this control is rationed for is the repaint of the region under a fixed
+ * layer, and that is a cost per layer, not per button. It also means the pair
+ * cannot drift apart as the reader's type size changes.
+ *
+ * Back first in the source, which is both the reading order and the tab order,
+ * and matches the left-to-right arrangement the stylesheet gives them. Neither
+ * button is ever disabled: knowing whether there is a thread above you is a
+ * question about scroll position, and answering it continuously would mean a
+ * scroll listener measuring every thread on a device that has just told us,
+ * through the media query, only that it can repaint - not that it is fast. A
+ * tap with nowhere to go does nothing, which is what running out should feel
+ * like at either end.
+ */
+function ThreadJump() {
+  return (
+    <div class="thread-jump" data-thread-jump hidden>
+      <ThreadArrow back={true} label={THREAD_PREV_LABEL} />
+      <ThreadArrow back={false} label={THREAD_NEXT_LABEL} />
+    </div>
   );
 }
 

@@ -827,7 +827,7 @@ describe("SITE_CSS - the thread jump button", () => {
   const RULES = SITE_CSS.replace(/\/\*[\s\S]*?\*\//g, "");
 
   test("pins nothing outside the query that says the device can afford it", () => {
-    const gate = "@media (update: fast) and (pointer: coarse) {";
+    const gate = "@media (update: fast) {";
     const start = RULES.indexOf(gate);
     expect(start).toBeGreaterThan(-1);
 
@@ -856,7 +856,16 @@ describe("SITE_CSS - the thread jump button", () => {
     // update: fast is the only standard signal for "this display can repaint
     // cheaply". Width, pixel ratio and monochrome are proxies that guess, and
     // they guess wrong on exactly the devices that matter.
-    expect(RULES).toContain("@media (update: fast) and (pointer: coarse)");
+    expect(RULES).toContain("@media (update: fast)");
+  });
+
+  test("asks nothing about the input device", () => {
+    // The cost being avoided is a repaint, not a tap. A mouse pays no more for
+    // a pinned corner than a thumb does, and a long discussion is long on a
+    // laptop too, so gating on pointer would withhold the control from a device
+    // that can afford it for a reason that is not about affording it.
+    expect(RULES).not.toContain("pointer: coarse");
+    expect(RULES).not.toContain("pointer:coarse");
   });
 
   test("fails closed: a browser that has never heard of update gets nothing", () => {
@@ -870,16 +879,38 @@ describe("SITE_CSS - the thread jump button", () => {
     expect(RULES).toContain("html[data-thread-jump-ready] [data-thread-jump]");
   });
 
-  test("gives the button a full tap target and the only curve in the sheet", () => {
-    const rule =
-      /html\[data-thread-jump-ready\] \[data-thread-jump\] \{[^}]*\}/.exec(RULES)?.[0] ??
-      "";
+  test("gives each arrow a full tap target and the only curve in the sheet", () => {
+    const rule = /\.thread-jump-btn \{[^}]*\}/.exec(RULES)?.[0] ?? "";
     expect(rule).toContain("width: var(--tap)");
     expect(rule).toContain("height: var(--tap)");
     expect(rule).toContain("border-radius: 50%");
     // Everything else in the sheet is square; a dithered arc is a ragged edge
     // on greyscale, which is not a concern for anything matching the query.
     expect([...RULES.matchAll(/border-radius: (?!0)/g)]).toHaveLength(1);
+  });
+
+  test("separates the two arrows, since they undo each other", () => {
+    // A thumb aiming for one must not carry into the other. This is the one
+    // place on the page where a mis-tap reverses the tap before it.
+    const rule =
+      /html\[data-thread-jump-ready\] \[data-thread-jump\] \{[^}]*\}/.exec(RULES)?.[0] ??
+      "";
+    expect(rule).toContain("gap:");
+  });
+
+  test("pins one layer for the pair, not one each", () => {
+    // The repaint this control is rationed for is a cost per fixed layer, not
+    // per button, so the buttons share a box rather than each having their own.
+    const rule = /\.thread-jump-btn \{[^}]*\}/.exec(RULES)?.[0] ?? "";
+    expect(rule).not.toContain("position:");
+    expect(rule).not.toContain("z-index");
+  });
+
+  test("lets a tap report the button rather than the glyph inside it", () => {
+    // The script can walk up from an SVG child, but only where SVG elements
+    // carry closest. This makes that walk the fallback, not the mechanism.
+    const rule = /\.thread-jump-icon \{[^}]*\}/.exec(RULES)?.[0] ?? "";
+    expect(rule).toContain("pointer-events: none");
   });
 
   test("sits above the pinned header stack it will overlap", () => {
@@ -897,11 +928,14 @@ describe("SITE_CSS - the thread jump button", () => {
   });
 
   test("keeps its own promise about transitions", () => {
-    const rule =
+    const box =
       /html\[data-thread-jump-ready\] \[data-thread-jump\] \{[^}]*\}/.exec(RULES)?.[0] ??
       "";
-    expect(rule).not.toContain("transition");
-    expect(rule).not.toContain("box-shadow");
+    const btn = /\.thread-jump-btn \{[^}]*\}/.exec(RULES)?.[0] ?? "";
+    for (const rule of [box, btn]) {
+      expect(rule).not.toContain("transition");
+      expect(rule).not.toContain("box-shadow");
+    }
   });
 
   test("is not printed", () => {

@@ -1192,16 +1192,17 @@ const THREAD_HTML = commentsHtml(STORY, [
 ]);
 
 /**
- * A whole discussion: three top-level threads inside the section the story page
- * really wraps them in, followed by the same "Back to top" actions paragraph,
- * and the jump button as `StoryView` ships it.
+ * A whole story page: the header the back arrow bottoms out at, three top-level
+ * threads inside the section the page really wraps them in, the same "Back to
+ * top" actions paragraph, and the jump control as `StoryView` ships it.
  *
- * Built from `commentsHtml` for the same reason as above. The button is spelled
- * out because it comes from a JSX component this file cannot render, and
- * `tests/web-views.test.tsx` holds the assertion that the real one still
- * carries these two attributes.
+ * Built from `commentsHtml` for the same reason as above. The control is
+ * spelled out because it comes from a JSX component this file cannot render,
+ * and `tests/web-views.test.tsx` holds the assertion that the real one still
+ * carries these attributes.
  */
 const JUMP_HTML =
+  `<header class="story-head" id="top"><h1>A story</h1></header>` +
   `<section class="comments" id="comments"><h2>3 comments</h2>` +
   commentsHtml(STORY, [
     [
@@ -1214,7 +1215,12 @@ const JUMP_HTML =
   ]) +
   `<p class="actions"><a class="btn jump" href="#top">Back to top</a></p>` +
   `</section>` +
-  `<button class="thread-jump" type="button" data-thread-jump hidden></button>`;
+  `<div class="thread-jump" data-thread-jump hidden>` +
+  `<button class="thread-jump-btn" type="button" data-thread-jump-to="prev">` +
+  `<svg class="thread-jump-icon"><path d="M12 20V5"></path></svg></button>` +
+  `<button class="thread-jump-btn" type="button" data-thread-jump-to="next">` +
+  `<svg class="thread-jump-icon"><path d="M12 4v15"></path></svg></button>` +
+  `</div>`;
 
 /**
  * One function out of the shipped source, by brace counting, so it can be run
@@ -1290,8 +1296,12 @@ interface Page {
   scrollY: () => number;
   find: (selector: string) => NodeLike;
   click: (target: unknown, options?: ClickOptions) => void;
-  /** The jump button, or null when the page never rendered one. */
+  /** The jump control's box, or null when the page never rendered one. */
   jump: () => NodeLike | null;
+  /** One of the two arrows, by direction. */
+  arrow: (to: "prev" | "next") => NodeLike;
+  /** The glyph inside an arrow, which is what a real tap lands on. */
+  glyph: (to: "prev" | "next") => NodeLike;
   /** The <html> element, which is where the reveal writes its marker. */
   root: () => NodeLike;
 }
@@ -1319,11 +1329,18 @@ function page(opts: PageOptions = {}): Page {
   /*
    * The jump stops, in document space like the comments above. The actions
    * paragraph has no id of its own - it does not need one, nothing links to it
-   * - so it answers to "foot" here.
+   * - so it answers to "foot" here. The story header answers to its own id,
+   * "top", which is the anchor the Back to top link already uses.
    */
-  const stopTops = opts.stops ?? { tA: 200, tB: 900, tC: 1600, foot: 2300 };
+  const stopTops = opts.stops ?? {
+    top: -400,
+    tA: 200,
+    tB: 900,
+    tC: 1600,
+    foot: 2300,
+  };
   for (const node of Array.from(
-    document.querySelectorAll(".comments .thread, .comments .actions"),
+    document.querySelectorAll(".story-head, .comments .thread, .comments .actions"),
   )) {
     const el = node as unknown as DetailsEl;
     const key = el.id || "foot";
@@ -1412,6 +1429,16 @@ function page(opts: PageOptions = {}): Page {
       return node as NodeLike;
     },
     jump: () => (realQuery("[data-thread-jump]") as NodeLike | null) ?? null,
+    arrow: (to) => {
+      const node = realQuery(`[data-thread-jump-to="${to}"]`);
+      if (!node) throw new Error(`no ${to} arrow in the rendered page`);
+      return node as NodeLike;
+    },
+    glyph: (to) => {
+      const node = realQuery(`[data-thread-jump-to="${to}"] .thread-jump-icon`);
+      if (!node) throw new Error(`no ${to} glyph in the rendered page`);
+      return node as NodeLike;
+    },
     root: () => document.documentElement as unknown as NodeLike,
     click: (target, options = {}) => {
       (target as NodeLike).dispatchEvent(new Event("click", { bubbles: true }));
@@ -1463,11 +1490,12 @@ describe("APP_JS - scroll correction, as written", () => {
 
   test("never enumerates comments, only top-level threads", () => {
     // The reason there is no per-comment registration in the first place. The
-    // thread jump is allowed one bounded query because the set it collects is
+    // thread jump is allowed two bounded queries because what each collects is
     // the handful of thread sections, not the comments inside them.
     const queries = SCROLL_CODE.match(/querySelectorAll\([^)]*\)/g) ?? [];
     expect(queries).toEqual([
       'querySelectorAll(".comments .thread, .comments .actions")',
+      'querySelectorAll(".story-head, .comments .thread")',
     ]);
   });
 
@@ -1696,8 +1724,8 @@ describe("APP_JS - scroll correction, executed", () => {
   });
 });
 
-describe("APP_JS - the thread jump button", () => {
-  test("stays hidden and inert on a page that renders no button", () => {
+describe("APP_JS - the thread jump control", () => {
+  test("stays hidden and inert on a page that renders no control", () => {
     // Every page but a story page. The lookup misses and nothing else happens.
     const p = page();
 
@@ -1705,9 +1733,9 @@ describe("APP_JS - the thread jump button", () => {
     expect(p.registrations).toEqual(["click"]);
   });
 
-  test("reveals the button it finds, and marks the root for the stylesheet", () => {
+  test("reveals the control it finds, and marks the root for the stylesheet", () => {
     // Two halves of one gate. The attribute is what the media query keys off,
-    // so a desktop or e-ink reader gets the markup and still sees nothing.
+    // so an e-ink reader gets the markup and still sees nothing.
     const p = page({ jump: true });
 
     expect(p.jump()?.getAttribute("hidden")).toBeNull();
@@ -1717,25 +1745,31 @@ describe("APP_JS - the thread jump button", () => {
   test("moves to the first thread below the fold", () => {
     // Reading the article: every thread is ahead, so the answer is the first.
     const p = page({ jump: true, scrollY: 0 });
-    p.click(p.jump(), { toggles: false });
+    p.click(p.arrow("next"), { toggles: false });
 
     expect(p.scrolls).toEqual([200]);
   });
 
   test("moves to the next thread, not back to the first", () => {
     // Sitting on tB. tA is behind and tB is level, so tC is the only answer.
-    const p = page({ jump: true, stops: { tA: -700, tB: 0, tC: 900, foot: 1600 } });
-    p.click(p.jump(), { toggles: false });
+    const p = page({
+      jump: true,
+      stops: { top: -1600, tA: -700, tB: 0, tC: 900, foot: 1600 },
+    });
+    p.click(p.arrow("next"), { toggles: false });
 
     expect(p.scrolls).toEqual([900]);
   });
 
   test("lands a thread exactly where its fragment link would", () => {
-    // #tB already works with scripting off, and the button must not disagree
+    // #tB already works with scripting off, and the control must not disagree
     // with it: no headroom, no offset, the same top edge. A depth-0 header pins
     // at top 0 anyway, so there is nothing above it to clear.
-    const p = page({ jump: true, stops: { tA: 500, tB: 1200, tC: 1900, foot: 2600 } });
-    p.click(p.jump(), { toggles: false });
+    const p = page({
+      jump: true,
+      stops: { top: -200, tA: 500, tB: 1200, tC: 1900, foot: 2600 },
+    });
+    p.click(p.arrow("next"), { toggles: false });
 
     expect(p.scrolls).toEqual([500]);
   });
@@ -1743,42 +1777,125 @@ describe("APP_JS - the thread jump button", () => {
   test("finishes at the foot of the discussion rather than stopping dead", () => {
     // Past the last thread the remaining stop is the actions paragraph, so the
     // last tap reaches the end of the page instead of doing nothing.
-    const p = page({ jump: true, stops: { tA: -900, tB: -600, tC: -300, foot: 400 } });
-    p.click(p.jump(), { toggles: false });
+    const p = page({
+      jump: true,
+      stops: { top: -2000, tA: -900, tB: -600, tC: -300, foot: 400 },
+    });
+    p.click(p.arrow("next"), { toggles: false });
 
     expect(p.scrolls).toEqual([400]);
   });
 
   test("does nothing at all once there is nothing left below", () => {
-    const p = page({ jump: true, stops: { tA: -900, tB: -600, tC: -300, foot: -50 } });
+    const p = page({
+      jump: true,
+      stops: { top: -2000, tA: -900, tB: -600, tC: -300, foot: -50 },
+    });
+    p.click(p.arrow("next"), { toggles: false });
+
+    expect(p.scrolls).toEqual([]);
+  });
+
+  test("never scrolls upward on the forward arrow, whatever the geometry says", () => {
+    // The guard behind the "strictly below" rule. A stop at 0 or above is
+    // behind the reader, and moving back would make the arrow unusable.
+    const p = page({
+      jump: true,
+      stops: { top: -900, tA: 0, tB: 1, tC: 900, foot: 1600 },
+    });
+    p.click(p.arrow("next"), { toggles: false });
+
+    for (const delta of p.scrolls) expect(delta).toBeGreaterThan(0);
+  });
+
+  test("goes back to the thread above, not the one it is sitting on", () => {
+    // Sitting on tC. tC is level and tB is the nearest thing behind it.
+    const p = page({
+      jump: true,
+      stops: { top: -2400, tA: -1400, tB: -700, tC: 0, foot: 700 },
+    });
+    p.click(p.arrow("prev"), { toggles: false });
+
+    expect(p.scrolls).toEqual([-700]);
+  });
+
+  test("never scrolls downward on the back arrow, whatever the geometry says", () => {
+    const p = page({
+      jump: true,
+      stops: { top: -900, tA: -1, tB: 0, tC: 900, foot: 1600 },
+    });
+    p.click(p.arrow("prev"), { toggles: false });
+
+    for (const delta of p.scrolls) expect(delta).toBeLessThan(0);
+  });
+
+  test("bottoms out at the top of the story, not at the first thread", () => {
+    // A reader who came down through a long article needs a way back up it, and
+    // the masthead does not stay on screen to offer one.
+    const p = page({
+      jump: true,
+      stops: { top: -1800, tA: 0, tB: 700, tC: 1400, foot: 2100 },
+    });
+    p.click(p.arrow("prev"), { toggles: false });
+
+    expect(p.scrolls).toEqual([-1800]);
+  });
+
+  test("does nothing at the very top of the page", () => {
+    const p = page({
+      jump: true,
+      stops: { top: 0, tA: 900, tB: 1600, tC: 2300, foot: 3000 },
+    });
+    p.click(p.arrow("prev"), { toggles: false });
+
+    expect(p.scrolls).toEqual([]);
+  });
+
+  test("ignores the foot block going back, since the last thread is the answer", () => {
+    // At the bottom of the page the useful destination is the last thread, not
+    // the buttons a few lines above it - which is why the two directions do not
+    // share a stop list.
+    const p = page({
+      jump: true,
+      stops: { top: -3000, tA: -2000, tB: -1300, tC: -600, foot: -100 },
+    });
+    p.click(p.arrow("prev"), { toggles: false });
+
+    expect(p.scrolls).toEqual([-600]);
+  });
+
+  test("acts on a tap that lands on the glyph rather than the button", () => {
+    // The stylesheet makes the icon transparent to pointers, but a browser that
+    // ignores that must still work: the handler walks up to the arrow.
+    const p = page({ jump: true, scrollY: 0 });
+    p.click(p.glyph("next"), { toggles: false });
+
+    expect(p.scrolls).toEqual([200]);
+  });
+
+  test("ignores a tap on the box between the two arrows", () => {
+    // The gap is a mis-tap guard. Hitting it must do nothing, not pick a
+    // direction on the reader's behalf.
+    const p = page({ jump: true, scrollY: 0 });
     p.click(p.jump(), { toggles: false });
 
     expect(p.scrolls).toEqual([]);
   });
 
-  test("never scrolls upward, whatever the geometry says", () => {
-    // The guard behind the "strictly below" rule. A stop at 0 or above is
-    // behind the reader, and moving back would make the button unusable.
-    const p = page({ jump: true, stops: { tA: 0, tB: 1, tC: 900, foot: 1600 } });
-    p.click(p.jump(), { toggles: false });
-
-    for (const delta of p.scrolls) expect(delta).toBeGreaterThan(0);
-  });
-
-  test("collects the thread list once, not on every tap", () => {
-    // The set never changes; only its geometry does. Re-querying per tap would
-    // walk every comment on the page to rediscover the same three sections.
+  test("collects both thread lists once, not on every tap", () => {
+    // Neither set ever changes; only its geometry does. Re-querying per tap
+    // would walk every comment on the page to rediscover the same sections.
     const p = page({ jump: true });
-    p.click(p.jump(), { toggles: false });
-    p.click(p.jump(), { toggles: false });
+    p.click(p.arrow("next"), { toggles: false });
+    p.click(p.arrow("prev"), { toggles: false });
 
     const all = p.selectors.filter((s) => s.indexOf(".thread") !== -1);
-    expect(all).toHaveLength(1);
+    expect(all).toHaveLength(2);
   });
 
   test("does not touch the comment collapse listener", () => {
     // Both live in the same IIFE. Collapsing must keep working on a page that
-    // has a button, and the button must not ride on the collapse delegation.
+    // has a control, and the control must not ride on the collapse delegation.
     const p = page({ jump: true, scrollY: 3000 });
     p.click(p.find("#c2 > summary.chead"));
 
