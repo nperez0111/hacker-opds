@@ -111,7 +111,7 @@ Or with the provided compose file:
 docker compose up -d
 ```
 
-The image is ~115 MB, of which 83 MB is the Bun binary. It runs as a non-root
+The image is ~117 MB, of which 83 MB is the Bun binary. It runs as a non-root
 user, stores everything under `/data`, and ships a healthcheck that reads
 `/healthz` rather than trusting the status code (the endpoint answers 200 even
 when degraded, by design).
@@ -281,6 +281,48 @@ bytes and ETag revalidation:
 ```bash
 bun run probe http://localhost:3000 --deep
 ```
+
+### In a container
+
+The image carries `.output` and nothing else — no source tree, no
+`node_modules` — so `bun run ingest` has nothing to run there. `bun run build`
+bundles the three maintenance scripts into the output instead, and they are
+exec'd by path with exactly the arguments documented above:
+
+```bash
+docker exec hacker-opds bun run /app/.output/server/scripts/ingest.mjs 2026-08-16
+docker exec hacker-opds bun run /app/.output/server/scripts/ingest.mjs 2026-08-16 --build
+docker exec hacker-opds bun run /app/.output/server/scripts/reindex.mjs --all
+docker exec hacker-opds bun run /app/.output/server/scripts/reset.mjs --epubs --date 2026-08-16 --dry-run
+```
+
+`docker exec` inherits the image's `USER`, so these already run as `bun` and
+write to `/data` exactly as the server does — `-u` is not needed, and `-u root`
+would leave root-owned files behind for the server to trip over. They read the
+container's environment too, so `DATA_DIR`, `EDITION_TZ` and the rest mean the
+same thing to a script as they do to the server.
+
+`probe` is deliberately not shipped. Its headline check is that no catalogue
+link leaves the crawl origin, so aimed at `127.0.0.1` from inside the container
+it would flag every correctly-formed link on any deployment that sets
+`PUBLIC_BASE_URL`. It is a tool to point *at* a deployment, not to run in one.
+
+Doing this while the server is up is safe, with one exception. SQLite is in WAL
+mode and writers wait for each other rather than failing, so an exec'd script
+and the hourly prewarm can overlap freely. The coalescer that collapses
+duplicate builds is per-process, so two processes can build the same book at
+once — but EPUB bytes are deterministic, so that costs work rather than
+correctness. The exception is two ingests of the **same** edition at the same
+time: artifacts are written straight to their final path rather than through a
+rename, and an ingest refreshes points and comment counts, so the two runs can
+compute genuinely different bytes for one file and interleave them.
+
+Prefer `ingest <date>` on its own. Plain ingest is one Algolia request and
+touches HN not at all; `--build` fetches comment trees, and `HN_REQUEST_DELAY_MS`
+is enforced *within* a process — a second one shares neither the queue nor the
+cool-off that a 403 sets, so it doubles the request rate against HN and keeps
+knocking while the first process is politely waiting. Ingest the day and let
+prewarm build it, or run `--build` knowing the server is idle.
 
 ## Design notes
 

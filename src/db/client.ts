@@ -31,9 +31,20 @@ export function getDb(): Database {
   return db;
 }
 
-/** Wraps a synchronous unit of work in a transaction. */
+/**
+ * Wraps a synchronous unit of work in a transaction.
+ *
+ * IMMEDIATE, not the default DEFERRED. A deferred transaction takes its read
+ * snapshot on the first SELECT and only asks for the write lock later, and if
+ * another connection committed in between SQLite refuses the upgrade with
+ * SQLITE_BUSY straight away -- busy_timeout does not cover that case, because
+ * waiting could not help a snapshot that is already stale. Every caller here
+ * writes, so taking the lock up front costs nothing and turns the one failure
+ * mode a timeout cannot absorb into one it can. Nested calls are unaffected:
+ * bun:sqlite uses savepoints inside an open transaction and ignores the mode.
+ */
 export function tx<T>(fn: () => T): T {
-  return getDb().transaction(fn)();
+  return getDb().transaction(fn).immediate();
 }
 
 /**

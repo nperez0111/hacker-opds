@@ -8,6 +8,16 @@ PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 
+-- WAL lets readers and writers coexist, but it still allows only one writer at
+-- a time, and bun:sqlite defaults busy_timeout to 0 -- so the second writer
+-- fails instantly with SQLITE_BUSY rather than waiting its turn. That is
+-- invisible while one process owns the database and immediately reachable once
+-- a second one does: an operational script exec'd into the container (see
+-- scripts/build-ops.ts) writing while the hourly prewarm task is mid-ingest.
+-- Five seconds is far longer than any transaction here, all of which are short
+-- row writes with the network work kept outside them.
+PRAGMA busy_timeout = 5000;
+
 CREATE TABLE IF NOT EXISTS editions (
   date        TEXT PRIMARY KEY,          -- YYYY-MM-DD in edition tz
   tz          TEXT NOT NULL,

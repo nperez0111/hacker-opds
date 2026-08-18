@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "LOG_PRETTY=true LOG_LEVEL=debug bun --bun vite --host",
-    "build": "vite build",
+    "build": "vite build && bun run scripts/build-ops.ts",
     "start": "bun run ./.output/server/index.mjs",
     "test": "bun test",
     "test:integration": "RUN_INTEGRATION=1 bun test tests/integration",
