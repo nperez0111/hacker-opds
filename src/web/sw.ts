@@ -16,6 +16,14 @@
  *     here, with no transpiler in between, means what is tested is what runs.
  */
 import { manifestIcons } from "~/web/icons";
+import {
+  CACHED_AT_HEADER,
+  CACHED_BYTES_HEADER,
+  CACHE_MAX_AGE_MS,
+  CACHE_MAX_BYTES,
+  CACHE_SWEEP_INTERVAL_MS,
+  SWEEP_MARK_URL,
+} from "~/web/offline";
 
 /**
  * Caching strategy, and why it is split.
@@ -45,6 +53,113 @@ export function serviceWorkerJs(opts: ServiceWorkerOptions): string {
 var CACHE = ${JSON.stringify(cacheName)};
 var PRECACHE = ${JSON.stringify(opts.precache)};
 var OFFLINE_URL = "/offline";
+
+/*
+ * Retention. Every number here comes from ~/web/offline, which is also what
+ * the page copy and the marker script read, so the thirty days the edition
+ * page promises and the thirty days enforced below cannot drift apart.
+ */
+var MAX_AGE_MS = ${CACHE_MAX_AGE_MS};
+var MAX_BYTES = ${CACHE_MAX_BYTES};
+var SWEEP_EVERY_MS = ${CACHE_SWEEP_INTERVAL_MS};
+var STAMP_HEADER = ${JSON.stringify(CACHED_AT_HEADER)};
+var BYTES_HEADER = ${JSON.stringify(CACHED_BYTES_HEADER)};
+var SWEEP_MARK = ${JSON.stringify(SWEEP_MARK_URL)};
+
+/*
+ * Entries no rule may ever evict: the precache list, plus the sweep's own
+ * bookkeeping entry.
+ *
+ * PRECACHE is the app shell - "/", "/offline", the stylesheet and the script.
+ * Ageing those out is the one way this feature could make the site worse than
+ * it was: install is the only thing that puts them back, install only runs on
+ * a worker update, and a reader whose shell expired while they were out of
+ * range gets a browser error page instead of "/offline". They are four entries
+ * and about 50 KB against a 64 MB budget, so exempting them costs nothing
+ * measurable, and they do not go stale either - "/" is network-first and is
+ * rewritten on every online visit, and the other two carry a content hash in
+ * the URL, so a change to them is a different URL and a different cache entry.
+ *
+ * Compared as absolute URLs because that is what cache.keys() hands back.
+ *
+ * One consequence worth stating: cache.addAll cannot stamp, so the copies
+ * install writes carry no byte count and contribute nothing to the size total
+ * until something re-stores them - which "/" does on the first online
+ * navigation and the two assets do on their first background refresh. The
+ * error is at most the shell's own size, on a budget three orders of magnitude
+ * larger, and the alternative is replacing addAll's single atomic call with a
+ * hand-rolled fetch-and-stamp loop inside install, which is the one place in
+ * this file where a failure wedges the worker.
+ */
+var PROTECTED = PRECACHE.concat([SWEEP_MARK]).map(function (url) {
+  return new URL(url, self.location.href).href;
+});
+
+function isProtected(url) {
+  return PROTECTED.indexOf(url) !== -1;
+}
+
+/*
+ * Rewrite a response with the two facts eviction needs: when this device
+ * stored it, and how big it is.
+ *
+ * The alternative was the response's own Date header, and it is the wrong
+ * clock twice - it is the origin's, and for a cache-first page refreshed in
+ * the background it says when the server answered rather than when this device
+ * wrote the entry. Date is still read as a fallback in cachedAt, for an entry
+ * that somehow arrived without a stamp.
+ *
+ * Headers cannot be set on a response that already exists, so this constructs
+ * a new one, which means reading the body. That read is also where the byte
+ * count comes from - so the size cap, which would otherwise need a pass that
+ * reads every body back, is free.
+ */
+function stamped(response, now) {
+  return response.blob().then(function (body) {
+    var headers = new Headers(response.headers);
+    headers.set(STAMP_HEADER, String(now));
+    headers.set(BYTES_HEADER, String(body.size));
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: headers
+    });
+  });
+}
+
+/* Epoch milliseconds this entry was stored, or 0 when it cannot be dated. */
+function cachedAt(response) {
+  if (!response) return 0;
+  var stamp = Number(response.headers.get(STAMP_HEADER));
+  if (stamp > 0) return stamp;
+  var date = Date.parse(response.headers.get("date") || "");
+  return date > 0 ? date : 0;
+}
+
+function storedBytes(response) {
+  var bytes = response ? Number(response.headers.get(BYTES_HEADER)) : 0;
+  return bytes > 0 ? bytes : 0;
+}
+
+/*
+ * An entry that cannot be dated is never expired.
+ *
+ * The other reading - treat an unknown age as ancient - would turn any future
+ * bug in the stamping into the silent deletion of a reader's whole offline
+ * library, discovered on a device with no network. This way the failure mode
+ * of a broken stamp is a cache that grows, which the size cap still bounds.
+ *
+ * A clock that went backwards makes the difference negative, which is not
+ * greater than the limit, so a device whose time was wrong and got fixed
+ * keeps its pages rather than losing all of them at once.
+ */
+function isStale(at, now) {
+  return at > 0 && now - at > MAX_AGE_MS;
+}
+
+function isExpired(response, now) {
+  return isStale(cachedAt(response), now);
+}
 
 /* Pages whose content is frozen once published, so cache-first is safe. */
 function isImmutablePage(path) {
@@ -125,6 +240,121 @@ self.addEventListener("install", function (event) {
   );
 });
 
+/*
+ * The whole eviction policy, in one pass over the cache index.
+ *
+ * Two rules, sharing one ordering key - the stamp - because they are the same
+ * judgement stated twice. Anything past thirty days goes; if what remains is
+ * still over the byte budget, the oldest of it keeps going until it is not.
+ *
+ * Oldest-first rather than least-recently-used, and the difference is worth
+ * being honest about: the Cache API records nothing about reads, so a true LRU
+ * would mean rewriting an entry on every hit - a full body copy per page view,
+ * on the slowest storage on the device, to reorder a list nobody looks at.
+ * Oldest-first is what the stamps already support at zero cost, and on this
+ * corpus it is close to the same answer anyway, because an edition is read in
+ * the days after it is saved and then never again.
+ *
+ * cache.match() on each key reads the entry's headers without touching its
+ * body, so the cost of a sweep is one index walk and no bytes.
+ */
+function sweep(now) {
+  return caches.open(CACHE).then(function (cache) {
+    return cache.keys().then(function (keys) {
+      return Promise.all(
+        keys.map(function (request) {
+          return cache.match(request).then(function (response) {
+            return {
+              request: request,
+              at: cachedAt(response),
+              bytes: storedBytes(response),
+              keep: isProtected(request.url)
+            };
+          });
+        })
+      ).then(function (entries) {
+        var drops = [];
+        var live = [];
+        var total = 0;
+        var i;
+
+        for (i = 0; i < entries.length; i++) {
+          if (!entries[i].keep && isStale(entries[i].at, now)) {
+            drops.push(entries[i].request);
+            continue;
+          }
+          /* Protected entries occupy space even though nothing may take it. */
+          total += entries[i].bytes;
+          if (!entries[i].keep) live.push(entries[i]);
+        }
+
+        /*
+         * Undated entries sort to the front and are shed first under pressure,
+         * which is the right order: an entry this worker cannot date is one it
+         * did not write, and it is the only kind the age rule cannot reach.
+         */
+        live.sort(function (a, b) {
+          return a.at - b.at;
+        });
+        for (i = 0; i < live.length && total > MAX_BYTES; i++) {
+          drops.push(live[i].request);
+          total -= live[i].bytes;
+        }
+
+        return Promise.all(
+          drops.map(function (request) {
+            return cache.delete(request);
+          })
+        ).then(function () {
+          return cache.put(
+            SWEEP_MARK,
+            new Response("", {
+              headers: makeStampHeaders(now)
+            })
+          );
+        }).then(function () {
+          return drops.length;
+        });
+      });
+    });
+  });
+}
+
+/* The sweep mark carries no body, so it is stamped by hand rather than read. */
+function makeStampHeaders(now) {
+  var headers = {};
+  headers[STAMP_HEADER] = String(now);
+  headers[BYTES_HEADER] = "0";
+  return headers;
+}
+
+/*
+ * At most one sweep per worker instance, and at most one per day across all of
+ * them.
+ *
+ * No timer, deliberately. A service worker is killed within seconds of going
+ * idle, so setInterval in one either never fires or holds the worker alive to
+ * no purpose - it is the classic mistake. The trigger is instead whatever
+ * request happened to wake the worker, gated by a flag that lasts as long as
+ * this instance and a timestamp in the cache that outlives it.
+ */
+var swept = false;
+
+function maybeSweep(now) {
+  if (swept) return Promise.resolve(null);
+  swept = true;
+  return caches
+    .match(SWEEP_MARK)
+    .then(function (mark) {
+      var last = cachedAt(mark);
+      if (last > 0 && now - last < SWEEP_EVERY_MS) return null;
+      return sweep(now);
+    })
+    .catch(function () {
+      return null;
+    });
+}
+
 self.addEventListener("activate", function (event) {
   event.waitUntil(
     caches
@@ -140,30 +370,48 @@ self.addEventListener("activate", function (event) {
         );
       })
       .then(function () {
+        /*
+         * Forced rather than throttled. Activate runs once per worker version,
+         * which on a quiet month is once, so this is the cheapest guaranteed
+         * sweep there is and skipping it because one happened yesterday would
+         * trade a certainty for nothing.
+         */
+        swept = true;
+        return sweep(Date.now()).catch(function () {});
+      })
+      .then(function () {
         return self.clients.claim();
       })
   );
 });
 
-/* Store a copy without consuming the response the page is waiting on. */
+/* Store a stamped copy without consuming the response the page is waiting on. */
 function put(request, response) {
   if (!response || response.status !== 200 || response.type === "opaque") {
     return response;
   }
   var copy = response.clone();
-  caches.open(CACHE).then(function (cache) {
-    cache.put(request, copy);
-  });
+  caches
+    .open(CACHE)
+    .then(function (cache) {
+      return stamped(copy, Date.now()).then(function (entry) {
+        return cache.put(request, entry);
+      });
+    })
+    /* One more link in this chain than there used to be, and a rejected
+     * cache.put is an unhandled rejection in the worker's console. */
+    .catch(function () {});
   return response;
 }
 
 function cacheFirst(request) {
   return caches.match(request).then(function (hit) {
-    if (hit) {
+    if (hit && !isExpired(hit, Date.now())) {
       /*
        * Refresh in the background anyway. The page is immutable, but the
        * server may have gained an article extraction or a cover since, and
-       * this costs the reader nothing.
+       * this costs the reader nothing. The refresh re-stamps the entry, so a
+       * page that is read regularly never ages out from under its reader.
        */
       fetch(request)
         .then(function (res) {
@@ -171,6 +419,31 @@ function cacheFirst(request) {
         })
         .catch(function () {});
       return hit;
+    }
+    if (hit) {
+      /*
+       * Past its thirty days. Deleted here rather than left for the next
+       * sweep, because this is the moment the space is known to be reclaimable
+       * and the sweep may be a day away.
+       *
+       * The stale copy is still returned if the network then fails. Losing the
+       * radio in the same second a page aged out should not cost the reader
+       * the page - the entry is gone from storage either way, which is the
+       * part the quota cares about.
+       */
+      caches
+        .open(CACHE)
+        .then(function (cache) {
+          return cache.delete(request);
+        })
+        .catch(function () {});
+      return fetch(request)
+        .then(function (res) {
+          return put(request, res);
+        })
+        .catch(function () {
+          return hit;
+        });
     }
     return fetch(request).then(function (res) {
       return put(request, res);
@@ -228,6 +501,17 @@ self.addEventListener("fetch", function (event) {
   if (url.origin !== self.location.origin) return;
   if (isBypassed(url.pathname)) return;
 
+  /*
+   * The periodic sweep, hung off whatever request woke the worker.
+   *
+   * waitUntil rather than a bare call so the browser does not tear the worker
+   * down mid-delete, and after the bypass check so an EPUB download or a
+   * /healthz poll is not what triggers it. maybeSweep returns an already
+   * settled promise every time but the first, so the cost on the normal path
+   * is one comparison.
+   */
+  event.waitUntil(maybeSweep(Date.now()));
+
   if (isAsset(url.pathname)) {
     event.respondWith(cacheFirst(request));
     return;
@@ -247,11 +531,21 @@ self.addEventListener("fetch", function (event) {
 });
 
 /*
- * Bulk save, driven by the "Save for offline" button on an edition page.
+ * Bulk save, driven by the save button on an edition page.
  *
  * Sequential on purpose. Thirty parallel requests for pages that each embed a
  * full article and its comment tree is a burst the server has no reason to
  * absorb, and an e-reader radio handles it worse than the server does.
+ *
+ * A page already in the cache and still inside its thirty days is skipped
+ * rather than refetched, which is what makes the button's label honest: the
+ * pages a reader has already opened were cached as they read them, and this
+ * only pays for the rest. On an edition half of which has been read that is
+ * half the radio time, and the copy on the page says so.
+ *
+ * Each stored page is named back to the sender so the list it was launched
+ * from can grow its markers as the save walks down it, rather than showing
+ * thirty at once on the next navigation.
  */
 self.addEventListener("message", function (event) {
   var data = event.data || {};
@@ -263,39 +557,69 @@ self.addEventListener("message", function (event) {
   event.waitUntil(
     caches.open(CACHE).then(function (cache) {
       var done = 0;
+      var already = 0;
       var failed = 0;
 
-      function report(state) {
+      function report(state, saved) {
         if (!source) return;
         source.postMessage({
           type: "save-progress",
           state: state,
           done: done,
+          already: already,
           failed: failed,
-          total: urls.length
+          total: urls.length,
+          url: saved || null
         });
+      }
+
+      function store(url) {
+        return fetch(url, { credentials: "same-origin" })
+          .then(function (res) {
+            if (!res || res.status !== 200) {
+              failed += 1;
+              return null;
+            }
+            return stamped(res, Date.now())
+              .then(function (entry) {
+                return cache.put(url, entry);
+              })
+              .then(function () {
+                done += 1;
+                return url;
+              });
+          })
+          .catch(function () {
+            failed += 1;
+            return null;
+          });
       }
 
       function step(i) {
         if (i >= urls.length) {
           report("done");
-          return null;
+          /*
+           * A bulk save is the largest single write this application makes,
+           * so it is the one moment the byte budget is most likely to have
+           * been crossed. Forced, and after the terminal report, so the
+           * reader is told the save finished without waiting on the sweep.
+           */
+          swept = true;
+          return sweep(Date.now()).catch(function () {});
         }
-        return fetch(urls[i], { credentials: "same-origin" })
-          .then(function (res) {
-            if (res && res.status === 200) {
-              return cache.put(urls[i], res.clone()).then(function () {
-                done += 1;
-              });
+        var url = urls[i];
+        return cache
+          .match(url)
+          .then(function (hit) {
+            if (hit && !isExpired(hit, Date.now())) {
+              already += 1;
+              done += 1;
+              return url;
             }
-            failed += 1;
-            return null;
+            return store(url);
           })
-          .catch(function () {
-            failed += 1;
-          })
-          .then(function () {
-            report("progress");
+          .then(function (saved) {
+            report("progress", saved);
             return step(i + 1);
           });
       }
@@ -312,10 +636,11 @@ self.addEventListener("message", function (event) {
  * The page-side script.
  *
  * Registers the worker, marks the document so the stylesheet can reveal the
- * offline controls, wires the save button, and keeps your place when a comment
+ * offline controls, wires the save button, reveals the marker next to a story
+ * that is already on the device, and keeps your place when a comment
  * collapses. Everything it touches is optional: with scripting off the button
- * never appears, the comment tree still collapses natively, and every page
- * still renders and navigates.
+ * never appears, no marker is revealed, the comment tree still collapses
+ * natively, and every page still renders and navigates.
  *
  * Two independent IIFEs rather than one. The first returns immediately on a
  * browser without service workers, and the scroll correction must not be
@@ -493,6 +818,9 @@ export const APP_JS = `/* hacker-opds */
 (function () {
   if (!("serviceWorker" in navigator)) return;
 
+  var SAVED_MAX_AGE_MS = ${CACHE_MAX_AGE_MS};
+  var SAVED_STAMP = ${JSON.stringify(CACHED_AT_HEADER)};
+
   navigator.serviceWorker
     .register("/assets/sw.js", { scope: "/" })
     .then(function () {
@@ -500,7 +828,97 @@ export const APP_JS = `/* hacker-opds */
     })
     .catch(function () {});
 
+  /*
+   * The offline markers.
+   *
+   * Whether a page is on the device is only knowable from the Cache API, so
+   * the marker cannot be server-rendered. It ships in the markup already
+   * carrying the hidden attribute and its accessible name, and all this does
+   * is take the attribute off the ones that turn out to be cached. A reader
+   * with no worker, no scripting or no Cache API sees the page exactly as it
+   * was before - which is the only shape this can take, because a marker
+   * shown by default would be a claim about storage that is false on a first
+   * visit.
+   *
+   * The stamp is read here rather than the entry's mere presence being taken
+   * as proof, so an entry the worker has not swept yet but which is past its
+   * thirty days does not get a marker it is about to lose. The two agree
+   * because both numbers come out of ~/web/offline.
+   */
+  function markFor(url) {
+    /* The attribute values are site-relative paths this server generated, so
+     * there is nothing in them a selector has to be defended against. */
+    return document.querySelector('[data-saved-mark="' + url + '"]');
+  }
+
+  function reveal(node) {
+    if (node) node.removeAttribute("hidden");
+  }
+
+  function isSaved(url) {
+    return caches
+      .match(url)
+      .then(function (hit) {
+        if (!hit) return false;
+        var at = Number(hit.headers.get(SAVED_STAMP));
+        /* Undated entries are what the worker also declines to expire. */
+        if (!(at > 0)) return true;
+        return Date.now() - at <= SAVED_MAX_AGE_MS;
+      })
+      .catch(function () {
+        return false;
+      });
+  }
+
+  /*
+   * How many of the marked pages were found, written into the save button's
+   * status line.
+   *
+   * The glyph on its own says "this one"; this says "and here is how much of
+   * the button's work is already done", which is the number that decides
+   * whether to press it. Only ever written into an empty status line, so a
+   * save already in progress - which speaks through the same element - is
+   * never overwritten by a count that arrived late.
+   */
+  function tally(saved, total) {
+    var status = document.querySelector("[data-save-status]");
+    if (!status || !saved || status.textContent) return;
+    status.textContent =
+      saved >= total
+        ? "Every story here is already on this device."
+        : saved + " of " + total + " already on this device.";
+  }
+
+  /*
+   * One page at a time. Thirty concurrent Cache API reads on an e-reader is a
+   * burst of storage work competing with the render of the page it is
+   * annotating, for an annotation nobody is waiting on.
+   */
+  function scan() {
+    if (!window.caches || !document.querySelectorAll) return;
+    var nodes = document.querySelectorAll("[data-saved-mark]");
+    if (!nodes.length) return;
+
+    var saved = 0;
+    function next(i) {
+      if (i >= nodes.length) {
+        tally(saved, nodes.length);
+        return;
+      }
+      isSaved(nodes[i].getAttribute("data-saved-mark")).then(function (hit) {
+        if (hit) {
+          reveal(nodes[i]);
+          saved += 1;
+        }
+        next(i + 1);
+      });
+    }
+    next(0);
+  }
+
   function wire() {
+    scan();
+
     var button = document.querySelector("[data-save-edition]");
     if (!button) return;
 
@@ -520,13 +938,19 @@ export const APP_JS = `/* hacker-opds */
     navigator.serviceWorker.addEventListener("message", function (event) {
       var data = event.data || {};
       if (data.type !== "save-progress") return;
+      /* Each page the worker stores, marked the moment it lands. */
+      if (data.url) reveal(markFor(data.url));
       if (data.state === "done") {
         button.removeAttribute("aria-disabled");
-        say(
-          data.failed
-            ? "Saved " + data.done + " of " + data.total + ", " + data.failed + " failed."
-            : "Saved " + data.done + " stories for offline reading."
-        );
+        var already = data.already || 0;
+        var fetched = data.done - already;
+        if (data.failed) {
+          say("Saved " + fetched + " of " + data.total + ", " + data.failed + " failed.");
+        } else if (already) {
+          say("Saved " + fetched + ", and " + already + " were already here.");
+        } else {
+          say("Saved " + data.done + " pages for offline reading.");
+        }
         return;
       }
       say("Saving " + (data.done + data.failed) + " of " + data.total + "...");

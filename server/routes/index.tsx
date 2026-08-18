@@ -3,6 +3,7 @@ import { getEditionStories, latestEdition, today } from "~/core/edition";
 import { readFont } from "~/web/fonts";
 import { Shell, pageAttrs } from "~/web/layout";
 import { longDate } from "~/web/format";
+import { estimateEditionSave } from "~/web/size";
 import { EditionView, NotFoundView } from "~/web/views";
 import { readTheme } from "~/web/theme";
 
@@ -40,7 +41,12 @@ export default defineHandler((event) => {
         path="/"
         description={`The top ${stories.length} Hacker News stories of ${longDate(date)}, as readable articles with their comments.`}
       >
-        <EditionView date={date} today={today()} stories={stories} />
+        <EditionView
+          date={date}
+          today={today()}
+          stories={stories}
+          save={estimateEditionSave(date)}
+        />
       </Shell>
     </html>
   );

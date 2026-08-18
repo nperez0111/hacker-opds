@@ -20,6 +20,15 @@ import { describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import type { CommentRow } from "~/core/comments";
 import type { StoryRow } from "~/core/edition";
+import {
+  CACHED_AT_HEADER,
+  CACHED_BYTES_HEADER,
+  CACHE_MAX_AGE_DAYS,
+  CACHE_MAX_AGE_MS,
+  CACHE_MAX_BYTES,
+  CACHE_SWEEP_INTERVAL_MS,
+  SWEEP_MARK_URL,
+} from "~/web/offline";
 import { commentsHtml } from "~/web/story";
 import { SITE_CSS } from "~/web/styles";
 import { APP_JS, serviceWorkerJs, webManifest } from "~/web/sw";
@@ -230,6 +239,686 @@ describe("serviceWorkerJs - bulk save", () => {
   });
 });
 
+describe("serviceWorkerJs - retention, as written", () => {
+  test("carries the policy from ~/web/offline rather than its own numbers", () => {
+    // The worker is a string, the page shim is a string, and the copy on the
+    // edition page is JSX. Nothing type-checks the three against each other,
+    // so a reader promised thirty days and given twelve is a change nobody
+    // would notice - which is what these literals exist to catch.
+    const src = sw();
+    expect(src).toContain(`var MAX_AGE_MS = ${CACHE_MAX_AGE_MS};`);
+    expect(src).toContain(`var MAX_BYTES = ${CACHE_MAX_BYTES};`);
+    expect(src).toContain(`var SWEEP_EVERY_MS = ${CACHE_SWEEP_INTERVAL_MS};`);
+    expect(src).toContain(`var STAMP_HEADER = ${JSON.stringify(CACHED_AT_HEADER)};`);
+    expect(src).toContain(`var BYTES_HEADER = ${JSON.stringify(CACHED_BYTES_HEADER)};`);
+    expect(src).toContain(`var SWEEP_MARK = ${JSON.stringify(SWEEP_MARK_URL)};`);
+  });
+
+  test("derives the protected set from PRECACHE, not from a second list", () => {
+    // A hardcoded copy of the shell URLs here would go stale the moment the
+    // stylesheet changed, and the entry it stopped protecting would be the
+    // stylesheet.
+    const src = sw();
+    expect(src).toContain("var PROTECTED = PRECACHE.concat([SWEEP_MARK])");
+    expect(src).toContain("function isProtected(url)");
+  });
+
+  test("never sets a timer to drive the sweep", () => {
+    // A service worker is killed within seconds of going idle, so a repeating
+    // timer in one is either dead code or a leak. The one setTimeout in the
+    // file is networkFirst's deadline, which is scoped to a request in flight.
+    //
+    // Stripped of comments first, for the reason APP_CODE is further down:
+    // the worker's own prose explains why it does not use setInterval, and
+    // matching on that would fail the test for the explanation.
+    const src = sw().replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(src).not.toContain("setInterval");
+    expect(src.match(/setTimeout\(/g)).toHaveLength(1);
+  });
+
+  test("stamps what it stores rather than trusting the origin's Date", () => {
+    const src = sw();
+    expect(src).toContain("function stamped(response, now)");
+    expect(src).toContain("headers.set(STAMP_HEADER, String(now));");
+    expect(src).toContain("headers.set(BYTES_HEADER, String(body.size));");
+  });
+
+  test("sweeps from activate and from a request, never from nothing", () => {
+    const src = sw();
+    const activate = src.slice(src.indexOf('addEventListener("activate"'));
+    expect(activate).toContain("sweep(Date.now())");
+    expect(src).toContain("event.waitUntil(maybeSweep(Date.now()));");
+  });
+});
+
+/*
+ * The worker, executed.
+ *
+ * Everything below runs the shipped source in a scope where `self`, `caches`,
+ * `fetch` and `Date` are supplied by the test. That last one is the whole
+ * point: eviction is a function of elapsed time, and the only honest way to
+ * assert a thirty-day rule is to move the clock rather than to wait. `Response`,
+ * `Headers`, `Blob` and `URL` are the real ones, because the stamping is
+ * `response.blob()` into a new `Response` and a fake of that would be a test of
+ * the fake.
+ */
+
+const ORIGIN = "https://reader.test";
+const NOW = 1_800_000_000_000; // 2027-01-15T08:00:00Z, a round wall clock
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MB = 1024 * 1024;
+
+function days(n: number): number {
+  return n * DAY_MS;
+}
+
+/** Cache keys are absolute URLs, whether they went in as a string or a Request. */
+function absolute(target: unknown): string {
+  const raw =
+    typeof target === "string" ? target : ((target as { url: string }).url ?? "");
+  return new URL(raw, `${ORIGIN}/`).href;
+}
+
+/** One entry to place in the cache before the worker starts. */
+interface SeedEntry {
+  url: string;
+  /** Written as the worker's own stamp. Omit to model an entry it did not write. */
+  at?: number;
+  /** Written as the stamped byte count. Defaults to the body's length. */
+  bytes?: number;
+  body?: string;
+  /** Written as an origin `Date` header, for the fallback path. */
+  date?: string;
+}
+
+class FakeCache {
+  readonly entries = new Map<string, Response>();
+
+  put(request: unknown, response: Response): Promise<void> {
+    this.entries.set(absolute(request), response);
+    return Promise.resolve();
+  }
+
+  match(request: unknown): Promise<Response | undefined> {
+    return Promise.resolve(this.entries.get(absolute(request)));
+  }
+
+  delete(request: unknown): Promise<boolean> {
+    return Promise.resolve(this.entries.delete(absolute(request)));
+  }
+
+  keys(): Promise<Array<{ url: string }>> {
+    return Promise.resolve([...this.entries.keys()].map((url) => ({ url })));
+  }
+
+  addAll(urls: string[]): Promise<void> {
+    for (const url of urls) {
+      this.entries.set(absolute(url), new Response("precached"));
+    }
+    return Promise.resolve();
+  }
+}
+
+class FakeCacheStorage {
+  readonly caches = new Map<string, FakeCache>();
+
+  open(name: string): Promise<FakeCache> {
+    let cache = this.caches.get(name);
+    if (!cache) {
+      cache = new FakeCache();
+      this.caches.set(name, cache);
+    }
+    return Promise.resolve(cache);
+  }
+
+  keys(): Promise<string[]> {
+    return Promise.resolve([...this.caches.keys()]);
+  }
+
+  delete(name: string): Promise<boolean> {
+    return Promise.resolve(this.caches.delete(name));
+  }
+
+  async match(request: unknown): Promise<Response | undefined> {
+    for (const cache of this.caches.values()) {
+      const hit = await cache.match(request);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+}
+
+interface SaveMessage {
+  type: string;
+  state: string;
+  done: number;
+  already: number;
+  failed: number;
+  total: number;
+  url: string | null;
+}
+
+interface WorkerOptions {
+  now?: number;
+  seed?: SeedEntry[];
+  /** Body for a path, or null to make the request fail. */
+  network?: (path: string) => string | null;
+  /** Reuse storage across worker instances, which is what a real update does. */
+  storage?: FakeCacheStorage;
+}
+
+interface Worker {
+  storage: FakeCacheStorage;
+  cache: FakeCache;
+  /** Paths the stubbed network was asked for, in order. */
+  fetched: string[];
+  /** What is in the cache now, as paths, sorted. */
+  paths: () => string[];
+  entry: (url: string) => Response | undefined;
+  at: (url: string) => number;
+  setNow: (value: number) => void;
+  activate: () => Promise<void>;
+  navigate: (path: string) => Promise<Response | undefined>;
+  save: (urls: string[]) => Promise<SaveMessage[]>;
+  /** Lets the worker's fire-and-forget writes land. */
+  settle: () => Promise<void>;
+}
+
+const CACHE_NAME = "hacker-opds-v1";
+
+function seedResponse(entry: SeedEntry): Response {
+  const body = entry.body ?? "cached body";
+  const headers = new Headers({ "content-type": "text/html" });
+  if (entry.at !== undefined) headers.set(CACHED_AT_HEADER, String(entry.at));
+  // Independent of the stamp, so an undated entry can still be given a size -
+  // which is the case the size rule has to handle and the age rule cannot.
+  headers.set(CACHED_BYTES_HEADER, String(entry.bytes ?? body.length));
+  if (entry.date) headers.set("date", entry.date);
+  return new Response(body, { status: 200, headers });
+}
+
+function boot(options: WorkerOptions = {}): Worker {
+  const storage = options.storage ?? new FakeCacheStorage();
+  const network = options.network ?? (() => "network body");
+  const fetched: string[] = [];
+  let now = options.now ?? NOW;
+
+  if (!storage.caches.has(CACHE_NAME)) storage.caches.set(CACHE_NAME, new FakeCache());
+  const live = storage.caches.get(CACHE_NAME) as FakeCache;
+  for (const entry of options.seed ?? []) {
+    live.entries.set(absolute(entry.url), seedResponse(entry));
+  }
+
+  const listeners: Record<string, ((event: unknown) => void) | undefined> = {};
+  const scope = {
+    addEventListener(type: string, fn: (event: unknown) => void) {
+      listeners[type] = fn;
+    },
+    location: { origin: ORIGIN, href: `${ORIGIN}/` },
+    skipWaiting: () => Promise.resolve(),
+    clients: { claim: () => Promise.resolve() },
+  };
+
+  const fetchStub = (input: unknown): Promise<Response> => {
+    const url = absolute(input);
+    fetched.push(new URL(url).pathname);
+    const body = network(new URL(url).pathname);
+    if (body === null) return Promise.reject(new Error("offline"));
+    return Promise.resolve(
+      new Response(body, { status: 200, headers: { "content-type": "text/html" } }),
+    );
+  };
+
+  const clock = { now: () => now, parse: (value: string) => Date.parse(value) };
+
+  new Function("self", "caches", "fetch", "Date", sw())(scope, storage, fetchStub, clock);
+
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  return {
+    storage,
+    cache: live,
+    fetched,
+    paths: () =>
+      [...live.entries.keys()].map((url) => new URL(url).pathname + new URL(url).search).sort(),
+    entry: (url) => live.entries.get(absolute(url)),
+    at: (url) => Number(live.entries.get(absolute(url))?.headers.get(CACHED_AT_HEADER)),
+    setNow: (value) => {
+      now = value;
+    },
+    settle,
+    activate: async () => {
+      const pending: Array<Promise<unknown>> = [];
+      listeners.activate?.({ waitUntil: (p: Promise<unknown>) => pending.push(p) });
+      await Promise.all(pending);
+      await settle();
+    },
+    navigate: async (path) => {
+      const pending: Array<Promise<unknown>> = [];
+      let answered: Promise<Response> | undefined;
+      listeners.fetch?.({
+        request: {
+          method: "GET",
+          url: `${ORIGIN}${path}`,
+          mode: "navigate",
+          headers: { get: (name: string) => (name === "accept" ? "text/html" : null) },
+        },
+        waitUntil: (p: Promise<unknown>) => pending.push(p),
+        respondWith: (p: Promise<Response>) => {
+          answered = Promise.resolve(p);
+        },
+      });
+      const response = answered ? await answered : undefined;
+      await Promise.all(pending);
+      await settle();
+      return response;
+    },
+    save: async (urls) => {
+      const posted: SaveMessage[] = [];
+      const pending: Array<Promise<unknown>> = [];
+      listeners.message?.({
+        data: { type: "save-urls", urls },
+        source: { postMessage: (message: SaveMessage) => posted.push(message) },
+        waitUntil: (p: Promise<unknown>) => pending.push(p),
+      });
+      await Promise.all(pending);
+      await settle();
+      return posted;
+    },
+  };
+}
+
+describe("serviceWorkerJs - stamping, executed", () => {
+  test("records when this device stored an entry, and how big it is", async () => {
+    const worker = boot({ now: NOW, network: () => "a page" });
+    await worker.navigate("/story/1");
+
+    const entry = worker.entry("/story/1");
+    expect(entry?.headers.get(CACHED_AT_HEADER)).toBe(String(NOW));
+    expect(entry?.headers.get(CACHED_BYTES_HEADER)).toBe("6");
+  });
+
+  test("keeps the response's own headers, so the entry is still servable", async () => {
+    const worker = boot({ now: NOW });
+    await worker.navigate("/story/1");
+
+    expect(worker.entry("/story/1")?.headers.get("content-type")).toBe("text/html");
+    expect(await worker.entry("/story/1")?.text()).toBe("network body");
+  });
+
+  test("re-stamps on a background refresh, so a page being read never ages out", async () => {
+    // cacheFirst refreshes behind a hit. Without the re-stamp, a story opened
+    // every week would still expire thirty days after it was first opened.
+    const worker = boot({ now: NOW, seed: [{ url: "/story/1", at: NOW - days(20) }] });
+    worker.setNow(NOW + days(1));
+    await worker.navigate("/story/1");
+
+    expect(worker.at("/story/1")).toBe(NOW + days(1));
+  });
+});
+
+describe("serviceWorkerJs - age eviction, executed", () => {
+  test(`drops what is older than ${CACHE_MAX_AGE_DAYS} days and keeps the rest`, async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: "/story/1", at: NOW - days(CACHE_MAX_AGE_DAYS + 1) },
+        { url: "/story/2", at: NOW - days(CACHE_MAX_AGE_DAYS - 1) },
+        { url: "/archive/2026-08-16", at: NOW - days(90) },
+      ],
+    });
+
+    await worker.activate();
+
+    expect(worker.paths()).toEqual([SWEEP_MARK_URL, "/story/2"]);
+  });
+
+  test("keeps an entry that is exactly at the limit", async () => {
+    // The comparison is strictly greater, so the promise is "thirty days" and
+    // not "twenty-nine and a bit".
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - CACHE_MAX_AGE_MS }],
+    });
+    await worker.activate();
+
+    expect(worker.paths()).toContain("/story/1");
+  });
+
+  test("never touches the app shell, however old it is", async () => {
+    /*
+     * The one way this feature could make the site worse than it was. Only
+     * install puts these back, install only runs on a worker update, and a
+     * reader whose shell expired while out of range gets a browser error
+     * instead of the offline page.
+     */
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: "/", at: NOW - days(400) },
+        { url: "/offline", at: NOW - days(400) },
+        { url: PRECACHE[2] as string, at: NOW - days(400) },
+        { url: PRECACHE[3] as string, at: NOW - days(400) },
+        { url: "/story/1", at: NOW - days(400) },
+      ],
+    });
+
+    await worker.activate();
+
+    expect(worker.paths()).toEqual([
+      "/",
+      SWEEP_MARK_URL,
+      "/assets/app.js?v=ef567890",
+      "/assets/site.css?v=abcd1234",
+      "/offline",
+    ]);
+  });
+
+  test("leaves an entry it cannot date alone", async () => {
+    // Treating an unknown age as ancient would turn any future bug in the
+    // stamping into the silent deletion of a reader's whole library.
+    const worker = boot({ now: NOW, seed: [{ url: "/story/1" }] });
+    await worker.activate();
+
+    expect(worker.paths()).toContain("/story/1");
+  });
+
+  test("falls back to the origin's Date for an entry with no stamp", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: "/story/1", date: new Date(NOW - days(40)).toUTCString() },
+        { url: "/story/2", date: new Date(NOW - days(2)).toUTCString() },
+      ],
+    });
+    await worker.activate();
+
+    expect(worker.paths()).toEqual([SWEEP_MARK_URL, "/story/2"]);
+  });
+
+  test("keeps everything when the clock has gone backwards", async () => {
+    // A device whose time was wrong and then got fixed must not lose its
+    // entire cache in one pass.
+    const worker = boot({ now: NOW, seed: [{ url: "/story/1", at: NOW + days(400) }] });
+    await worker.activate();
+
+    expect(worker.paths()).toContain("/story/1");
+  });
+});
+
+describe("serviceWorkerJs - size eviction, executed", () => {
+  test("sheds the oldest entries until it is back under the budget", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: "/story/1", at: NOW - days(4), bytes: 20 * MB },
+        { url: "/story/2", at: NOW - days(3), bytes: 20 * MB },
+        { url: "/story/3", at: NOW - days(2), bytes: 20 * MB },
+        { url: "/story/4", at: NOW - days(1), bytes: 20 * MB },
+        { url: "/story/5", at: NOW, bytes: 20 * MB },
+      ],
+    });
+
+    await worker.activate();
+
+    // 100 MB against a 64 MB budget: the two oldest go, 60 MB remains.
+    expect(worker.paths()).toEqual([
+      SWEEP_MARK_URL,
+      "/story/3",
+      "/story/4",
+      "/story/5",
+    ]);
+    expect(CACHE_MAX_BYTES).toBe(64 * MB);
+  });
+
+  test("does nothing at all while the cache is inside the budget", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: "/story/1", at: NOW - days(4), bytes: 30 * MB },
+        { url: "/story/2", at: NOW, bytes: 30 * MB },
+      ],
+    });
+    await worker.activate();
+
+    expect(worker.paths()).toEqual([SWEEP_MARK_URL, "/story/1", "/story/2"]);
+  });
+
+  test("counts the shell against the budget but still refuses to evict it", async () => {
+    // Otherwise a large shell would be free, and the total the cap is defending
+    // would be understated by exactly the amount that cannot be reclaimed.
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: "/", at: NOW - days(10), bytes: 60 * MB },
+        { url: "/story/1", at: NOW - days(2), bytes: 10 * MB },
+        { url: "/story/2", at: NOW - days(1), bytes: 10 * MB },
+      ],
+    });
+
+    await worker.activate();
+
+    expect(worker.paths()).toEqual(["/", SWEEP_MARK_URL]);
+  });
+
+  test("sheds undated entries first, since the age rule cannot reach them", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: "/story/1", at: NOW - days(20), bytes: 40 * MB },
+        { url: "/story/2", bytes: 40 * MB },
+      ],
+    });
+
+    await worker.activate();
+
+    expect(worker.paths()).toEqual([SWEEP_MARK_URL, "/story/1"]);
+  });
+});
+
+describe("serviceWorkerJs - when the sweep runs", () => {
+  test("activate always sweeps, whatever happened yesterday", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: SWEEP_MARK_URL, at: NOW - 60_000 },
+        { url: "/story/1", at: NOW - days(40) },
+      ],
+    });
+
+    await worker.activate();
+
+    expect(worker.paths()).toEqual([SWEEP_MARK_URL]);
+  });
+
+  test("a request sweeps when the last one was long enough ago", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: SWEEP_MARK_URL, at: NOW - CACHE_SWEEP_INTERVAL_MS - 1 },
+        { url: "/story/1", at: NOW - days(40) },
+      ],
+    });
+
+    await worker.navigate("/archive");
+
+    expect(worker.paths()).not.toContain("/story/1");
+    expect(worker.at(SWEEP_MARK_URL)).toBe(NOW);
+  });
+
+  test("a request does not sweep again within the interval", async () => {
+    // The cost being avoided is an index walk of several hundred entries on
+    // every cold start of the worker, which on this hardware is not free.
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: SWEEP_MARK_URL, at: NOW - 60_000 },
+        { url: "/story/1", at: NOW - days(40) },
+      ],
+    });
+
+    await worker.navigate("/archive");
+
+    expect(worker.paths()).toContain("/story/1");
+  });
+
+  test("sweeps at most once per worker instance", async () => {
+    const worker = boot({ now: NOW, seed: [{ url: "/story/1", at: NOW - days(40) }] });
+
+    await worker.navigate("/archive");
+    expect(worker.paths()).not.toContain("/story/1");
+
+    // A second entry ages out while this instance is still alive. It survives
+    // until something else wakes the worker, which is the trade the throttle
+    // makes and is worth stating out loud.
+    worker.cache.entries.set(
+      absolute("/story/2"),
+      seedResponse({ url: "/story/2", at: NOW - days(40) }),
+    );
+    await worker.navigate("/archive");
+    expect(worker.paths()).toContain("/story/2");
+  });
+
+  test("the next worker instance picks it up", async () => {
+    const first = boot({ now: NOW, seed: [{ url: "/story/1", at: NOW - days(40) }] });
+    await first.navigate("/archive");
+
+    const second = boot({ storage: first.storage, now: NOW + CACHE_SWEEP_INTERVAL_MS + 1 });
+    second.cache.entries.set(
+      absolute("/story/2"),
+      seedResponse({ url: "/story/2", at: NOW - days(40) }),
+    );
+    await second.navigate("/archive");
+
+    expect(second.paths()).not.toContain("/story/2");
+  });
+
+  test("a bypassed request is not what triggers it", async () => {
+    // An EPUB download or a /healthz poll should not be paying for the sweep.
+    const worker = boot({ now: NOW, seed: [{ url: "/story/1", at: NOW - days(40) }] });
+    await worker.navigate("/healthz");
+
+    expect(worker.paths()).toContain("/story/1");
+  });
+});
+
+describe("serviceWorkerJs - serving an expired entry", () => {
+  test("goes to the network instead, and drops the stale copy", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - days(40), body: "stale" }],
+      network: () => "fresh",
+    });
+
+    const response = await worker.navigate("/story/1");
+
+    expect(await response?.text()).toBe("fresh");
+    expect(await worker.entry("/story/1")?.text()).toBe("fresh");
+    expect(worker.at("/story/1")).toBe(NOW);
+  });
+
+  test("still answers with the stale copy when the network is gone", async () => {
+    // The entry is reclaimed either way, which is what the quota cares about;
+    // losing the radio in the same second a page aged out should not also cost
+    // the reader the page.
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - days(40), body: "stale" }],
+      network: () => null,
+    });
+
+    const response = await worker.navigate("/story/1");
+
+    expect(await response?.text()).toBe("stale");
+    expect(worker.entry("/story/1")).toBeUndefined();
+  });
+
+  test("serves a fresh entry from the cache, as before", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - days(1), body: "cached" }],
+      network: () => "fresh",
+    });
+
+    const response = await worker.navigate("/story/1");
+
+    expect(await response?.text()).toBe("cached");
+    // ...and refreshed behind the reader's back, which is what it did before.
+    expect(worker.fetched).toEqual(["/story/1"]);
+  });
+});
+
+describe("serviceWorkerJs - bulk save, executed", () => {
+  test("skips a page that is already here and inside its thirty days", async () => {
+    // This is what makes the button's label honest: pages opened while reading
+    // were cached as they were read, and the save only pays for the rest.
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - days(2) }],
+    });
+
+    const messages = await worker.save(["/story/1", "/story/2"]);
+    const done = messages[messages.length - 1] as SaveMessage;
+
+    expect(worker.fetched).toEqual(["/story/2"]);
+    expect(done.state).toBe("done");
+    expect(done.already).toBe(1);
+    expect(done.done).toBe(2);
+    expect(done.failed).toBe(0);
+  });
+
+  test("refetches a page that has aged out", async () => {
+    const worker = boot({ now: NOW, seed: [{ url: "/story/1", at: NOW - days(40) }] });
+
+    const messages = await worker.save(["/story/1"]);
+
+    expect(worker.fetched).toEqual(["/story/1"]);
+    expect((messages[messages.length - 1] as SaveMessage).already).toBe(0);
+  });
+
+  test("stamps what it stores, so a saved edition expires like anything else", async () => {
+    const worker = boot({ now: NOW });
+    await worker.save(["/story/1"]);
+
+    expect(worker.at("/story/1")).toBe(NOW);
+  });
+
+  test("names each page back to the sender as it lands", async () => {
+    // Which is what lets the list the save was launched from grow its markers
+    // as the save walks down it, rather than on the next navigation.
+    const worker = boot({ now: NOW });
+    const messages = await worker.save(["/story/1", "/story/2"]);
+
+    expect(messages.map((m) => m.url)).toEqual([null, "/story/1", "/story/2", null]);
+  });
+
+  test("does not name a page it failed to fetch", async () => {
+    const worker = boot({ now: NOW, network: () => null });
+    const messages = await worker.save(["/story/1"]);
+    const done = messages[messages.length - 1] as SaveMessage;
+
+    expect(messages.map((m) => m.url)).toEqual([null, null, null]);
+    expect(done.failed).toBe(1);
+    expect(done.done).toBe(0);
+  });
+
+  test("sweeps once the save is finished", async () => {
+    // A bulk save is the largest single write this application makes, so it is
+    // the one moment the byte budget is most likely to have been crossed.
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/9", at: NOW - days(40) }],
+    });
+
+    await worker.save(["/story/1"]);
+
+    expect(worker.paths()).not.toContain("/story/9");
+  });
+});
+
 describe("APP_JS", () => {
   test("is syntactically valid JavaScript", () => {
     expect(() => new Function(APP_JS)).not.toThrow();
@@ -261,6 +950,183 @@ describe("APP_JS", () => {
   test("waits for the DOM before wiring the button", () => {
     expect(APP_JS).toContain('document.readyState === "loading"');
     expect(APP_JS).toContain('addEventListener("DOMContentLoaded", wire)');
+  });
+});
+
+describe("APP_JS - offline markers, as written", () => {
+  test("judges a marker by the same clock and header the worker stamps with", () => {
+    // Two strings that have to agree and that nothing type-checks against each
+    // other. Disagreeing means a marker next to a story the worker threw away
+    // last week, which is a lie the reader only discovers with no network.
+    expect(APP_JS).toContain(`var SAVED_MAX_AGE_MS = ${CACHE_MAX_AGE_MS};`);
+    expect(APP_JS).toContain(`var SAVED_STAMP = ${JSON.stringify(CACHED_AT_HEADER)};`);
+  });
+
+  test("reveals by removing the attribute the markup shipped with", () => {
+    // Never by writing a class or a style: the server-rendered state is the
+    // truthful one, and a script that has not run must leave it alone.
+    expect(APP_JS).toContain('node.removeAttribute("hidden")');
+    expect(APP_CODE).not.toContain('setAttribute("data-saved-mark"');
+  });
+
+  test("does nothing where there is no Cache API to ask", () => {
+    expect(APP_JS).toContain("if (!window.caches || !document.querySelectorAll) return;");
+  });
+
+  test("looks pages up one at a time", () => {
+    // Thirty concurrent Cache API reads on an e-reader is a burst of storage
+    // work competing with the render of the page being annotated.
+    expect(APP_JS).toContain("next(i + 1);");
+    expect(APP_CODE).not.toContain("Promise.all");
+  });
+
+  test("marks a page as the save reports it, rather than on the next visit", () => {
+    expect(APP_JS).toContain("if (data.url) reveal(markFor(data.url));");
+  });
+});
+
+/*
+ * The markers, executed.
+ *
+ * The DOM here is hand-built rather than rendered, which is a seam: the
+ * attribute names below are asserted against the real markup over in
+ * web-views.test.tsx, and this file proves what the script does with them. The
+ * thing that has to be proven here is the arithmetic - a marker is shown for a
+ * cached page and withheld for one that has aged out - and that needs an
+ * injected clock, which is why `Date` is a parameter of the evaluated source.
+ */
+const MARK_HTML =
+  '<ol class="stories">' +
+  '<li><a class="story-link" href="/story/1">' +
+  '<span class="saved" role="img" data-saved-mark="/story/1" hidden>\u2193</span></a></li>' +
+  '<li><a class="story-link" href="/story/2">' +
+  '<span class="saved" role="img" data-saved-mark="/story/2" hidden>\u2193</span></a></li>' +
+  '<li><a class="story-link" href="/story/3">' +
+  '<span class="saved" role="img" data-saved-mark="/story/3" hidden>\u2193</span></a></li>' +
+  "</ol>" +
+  '<span class="meta" data-save-status></span>';
+
+interface MarkerPage {
+  /** URLs whose marker is now visible. */
+  revealed: () => string[];
+  status: () => string;
+}
+
+/** `at` is the stamp on the cached entry; a URL that is absent is not cached. */
+async function markerPage(
+  cached: Record<string, number | null>,
+  options: { now?: number; status?: string } = {},
+): Promise<MarkerPage> {
+  const now = options.now ?? NOW;
+  const { document } = parseHTML(
+    `<!doctype html><html><body>${MARK_HTML}</body></html>`,
+  );
+  if (options.status) {
+    (document.querySelector("[data-save-status]") as { textContent: string }).textContent =
+      options.status;
+  }
+
+  const caches = {
+    match(url: string): Promise<Response | undefined> {
+      if (!(url in cached)) return Promise.resolve(undefined);
+      const at = cached[url];
+      const headers = new Headers();
+      if (at !== null) headers.set(CACHED_AT_HEADER, String(at));
+      return Promise.resolve(new Response("", { headers }));
+    },
+  };
+
+  const window = { caches };
+  const navigator = {
+    serviceWorker: {
+      register: () => Promise.resolve({}),
+      addEventListener: () => {},
+    },
+  };
+
+  new Function("window", "document", "navigator", "caches", "Date", "setTimeout", APP_JS)(
+    window,
+    document,
+    navigator,
+    caches,
+    { now: () => now },
+    (fn: () => void) => {
+      fn();
+      return 0;
+    },
+  );
+
+  // The scan walks the list one promise at a time, so one turn per entry plus
+  // slack. There is no timer involved, only microtasks.
+  for (let i = 0; i < 16; i += 1) await Promise.resolve();
+
+  return {
+    revealed: () =>
+      Array.from(document.querySelectorAll("[data-saved-mark]"))
+        .filter((node) => !(node as unknown as Element).hasAttribute("hidden"))
+        .map((node) => (node as unknown as Element).getAttribute("data-saved-mark") ?? ""),
+    status: () =>
+      (document.querySelector("[data-save-status]") as { textContent: string } | null)
+        ?.textContent ?? "",
+  };
+}
+
+describe("APP_JS - offline markers, executed", () => {
+  test("reveals the marker for a page that is in the cache", async () => {
+    const page = await markerPage({ "/story/1": NOW - days(2), "/story/3": NOW - days(2) });
+    expect(page.revealed()).toEqual(["/story/1", "/story/3"]);
+  });
+
+  test("leaves every marker hidden when nothing is cached", async () => {
+    // A first visit, and the state the markup ships in.
+    const page = await markerPage({});
+    expect(page.revealed()).toEqual([]);
+  });
+
+  test("withholds the marker from a page that has aged out", async () => {
+    // The worker may not have swept it yet, but it is not going to survive the
+    // next sweep, and a marker for it would be a promise the site cannot keep.
+    const page = await markerPage({
+      "/story/1": NOW - days(CACHE_MAX_AGE_DAYS + 1),
+      "/story/2": NOW - days(CACHE_MAX_AGE_DAYS - 1),
+    });
+    expect(page.revealed()).toEqual(["/story/2"]);
+  });
+
+  test("shows a marker for an entry it cannot date, matching the worker", async () => {
+    // The worker declines to expire an undated entry, so the page must decline
+    // to hide it. The two disagreeing is a marker that flickers on the arrow
+    // and off on the sweep, or worse, the other way round.
+    const page = await markerPage({ "/story/2": null });
+    expect(page.revealed()).toEqual(["/story/2"]);
+  });
+
+  test("counts what it found into the save button's status line", async () => {
+    const page = await markerPage({ "/story/1": NOW, "/story/2": NOW });
+    expect(page.status()).toBe("2 of 3 already on this device.");
+  });
+
+  test("says so plainly when the whole list is already here", async () => {
+    const page = await markerPage({
+      "/story/1": NOW,
+      "/story/2": NOW,
+      "/story/3": NOW,
+    });
+    expect(page.status()).toBe("Every story here is already on this device.");
+  });
+
+  test("says nothing at all when nothing is saved", async () => {
+    // "0 of 30 already on this device" is a sentence that costs a line of an
+    // e-ink panel to say what the absence of every marker already says.
+    expect((await markerPage({})).status()).toBe("");
+  });
+
+  test("never overwrites a save already in progress", async () => {
+    // Both speak through the same element, and the count is the one that can
+    // arrive late.
+    const page = await markerPage({ "/story/1": NOW }, { status: "Saving 4 of 31..." });
+    expect(page.status()).toBe("Saving 4 of 31...");
+    expect(page.revealed()).toEqual(["/story/1"]);
   });
 });
 
@@ -522,13 +1388,28 @@ function page(opts: PageOptions = {}): Page {
  */
 const APP_CODE = APP_JS.replace(/\/\*[\s\S]*?\*\//g, "");
 
+/**
+ * Just the first IIFE - the scroll correction.
+ *
+ * The service-worker half enumerates on purpose (it has to find every offline
+ * marker on the page), so an assertion that the script never enumerates has to
+ * be scoped to the half where enumerating would be the bug. Cut at the feature
+ * gate that opens the second IIFE, which is asserted to exist a few describes
+ * above.
+ */
+const SCROLL_CODE = APP_CODE.slice(
+  0,
+  APP_CODE.indexOf('if (!("serviceWorker" in navigator)) return;'),
+);
+
 describe("APP_JS - scroll correction, as written", () => {
   test("delegates a single click listener from the document", () => {
     // A busy story is several hundred comments; that many registrations is a
     // measurable cost on this hardware for something most readers never tap.
     expect(APP_JS).toContain('document.addEventListener(\n    "click",');
     expect(APP_JS).toContain('closest("summary.chead")');
-    expect(APP_CODE).not.toContain("querySelectorAll");
+    expect(SCROLL_CODE).not.toContain("querySelectorAll");
+    expect(SCROLL_CODE.length).toBeGreaterThan(0);
   });
 
   test("excludes the author link inside the header", () => {

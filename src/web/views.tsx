@@ -15,7 +15,10 @@ import type { EditionSummary, StoryRow } from "~/core/edition";
 import type { CommentRow } from "~/core/comments";
 import type { ArticleRecord } from "~/core/extract";
 import type { SearchResults } from "~/search/query";
+import type { EditionSaveSize } from "~/web/size";
+import { CACHE_MAX_AGE_DAYS } from "~/web/offline";
 import {
+  byteSize,
   editionHeading,
   longDate,
   plural,
@@ -29,23 +32,80 @@ import { HN_ITEM, articleByline, articleHtml, commentsHtml } from "~/web/story";
 
 const DOT = " \u00b7 ";
 
+/** The glyph the repo owner asked for, and the words that make it mean something. */
+const SAVED_GLYPH = "\u2193";
+const SAVED_LABEL = "Saved on this device";
+
+/**
+ * The marker on a story that is already in the offline cache.
+ *
+ * Server-rendered and shipped hidden, because whether a page is on the device
+ * is knowable only from the Cache API and only in the browser. The page-side
+ * script in `~/web/sw` finds these by their `data-saved-mark` attribute -
+ * whose value is the URL to look up - and takes the `hidden` attribute off the
+ * ones it finds. A reader with no worker, no Cache API or no scripting sees
+ * nothing, which is correct: they have nothing saved.
+ *
+ * A bare arrow is meaningless to anyone who has not been told what it means,
+ * so it carries its meaning three ways.
+ *
+ * `role="img"` with an `aria-label` is the accessible name. The alternative
+ * was a visually hidden span beside an `aria-hidden` glyph, which is the older
+ * idiom and was written first; it was replaced because `aria-label` on a
+ * `role="img"` is the pattern that exists for exactly this - a glyph standing
+ * in for a word - and because the span version was three elements and 190
+ * bytes rather than one and 145, repeated thirty times on a page rendered by a
+ * device where the DOM is the expensive part. Since the marker sits inside the
+ * row's anchor, that name becomes part of the link's: a screen reader
+ * announces the story and then says it is on the device, which is the whole
+ * point.
+ *
+ * `title` is for the sighted reader who wondered what the arrow meant and
+ * rested a pointer on it. It is not sufficient on its own - a title is
+ * unreachable by touch, and an e-reader is a touch device - which is why the
+ * edition page also prints the legend in words under the save button.
+ */
+function SavedMark(props: { href: string }) {
+  return (
+    <span
+      class="saved"
+      role="img"
+      aria-label={SAVED_LABEL}
+      title={SAVED_LABEL}
+      data-saved-mark={props.href}
+      hidden
+    >
+      {SAVED_GLYPH}
+    </span>
+  );
+}
+
 /**
  * One row of the story list.
  *
  * The whole row is a single anchor rather than a title link with metadata
  * beside it. An e-reader's touch layer is imprecise and its stylus optional,
  * so the target is the entire block - roughly 4x the area of the title alone.
+ *
+ * The marker is the row's third flex child rather than something appended to
+ * the title, so it occupies a column of its own down the right edge of the
+ * list. Inside the title it would reflow the headline when it appeared and
+ * would be lost in the middle of a wrapped line; in a column it is scannable
+ * from the top of the page, which is what a reader deciding what to open
+ * offline is actually doing.
  */
 function StoryRowItem(props: { story: StoryRow; index: number }) {
   const { story, index } = props;
+  const href = `/story/${story.id}`;
   return (
     <li>
-      <a class="story-link" href={`/story/${story.id}`}>
+      <a class="story-link" href={href}>
         <span class="rank">{index + 1}</span>
         <span class="story-body">
           <span class="story-title">{story.title}</span>
           <span class="story-meta">{storyMetaParts(story).join(DOT)}</span>
         </span>
+        <SavedMark href={href} />
       </a>
     </li>
   );
@@ -55,12 +115,20 @@ export interface EditionViewProps {
   date: string;
   today: string;
   stories: StoryRow[];
+  /**
+   * What the save button is about to spend, estimated from the database by
+   * `~/web/size`. Required rather than optional: a button that asks for four
+   * megabytes without saying so is the thing this exists to stop, and an
+   * optional prop is a button that silently goes back to not saying so the
+   * first time a new route forgets it.
+   */
+  save: EditionSaveSize;
   /** Present only on the front page, where "Today" needs an exact date under it. */
   subtitle?: string;
 }
 
 export function EditionView(props: EditionViewProps) {
-  const { date, today, stories, subtitle } = props;
+  const { date, today, stories, save, subtitle } = props;
   const heading = editionHeading(date, today);
   // Handed to the service worker as a JSON array. With no worker registered the
   // button stays hidden by CSS, so this costs a disabled reader nothing.
@@ -100,11 +168,30 @@ export function EditionView(props: EditionViewProps) {
         </p>
       ) : null}
 
+      {/*
+        The label states the download, not the storage, and the note under it
+        states both. Two different questions are being asked of that number -
+        "can I afford this right now, on this radio" and "will this fill my
+        reader" - and they differ by about 3.4x, because the reverse proxy
+        compresses and the worker's fetch decodes transparently: what crosses
+        the network is compressed and what lands in the cache is not. The one
+        that belongs on the button is the one that decides whether to press it.
+
+        "up to", because the worker skips whatever is already cached and every
+        page opened has been cached as it was read, so the true cost is this
+        number or less and never more.
+      */}
       <p class="actions" data-offline-ui hidden>
         <button class="btn" type="button" data-save-edition={saveUrls}>
-          Save for offline
+          Save the whole edition (up to {byteSize(save.wireBytes)})
         </button>
         <span class="meta" data-save-status></span>
+      </p>
+      <p class="offline-note" data-offline-ui hidden>
+        Pages are saved as you open them; this fetches the rest and skips what
+        is already here, about {byteSize(save.storageBytes)} on the device once
+        all of it is. {SAVED_GLYPH} marks a story that is already saved. Saved
+        pages are kept for {CACHE_MAX_AGE_DAYS} days.
       </p>
     </>
   );
@@ -176,6 +263,18 @@ export function StoryView(props: StoryViewProps) {
         <h1 class="page-title">{story.title}</h1>
         {byline.length > 0 ? <p class="page-sub">{byline.join(DOT)}</p> : null}
         <p class="meta">{facts.join(DOT)}</p>
+        {/*
+          The same marker as on the list, spelled out. There is room for words
+          here and no legend nearby, so the glyph gets its meaning printed
+          beside it rather than only in an accessible name - which also makes
+          this the place a reader learns what the arrow in the list meant.
+        */}
+        <p class="meta saved-line" data-saved-mark={`/story/${story.id}`} hidden>
+          <span class="saved-glyph" aria-hidden="true">
+            {SAVED_GLYPH}
+          </span>{" "}
+          {SAVED_LABEL}
+        </p>
         <p class="actions">
           <a class="btn btn-primary" href={`/epub/story/${story.id}.epub`}>
             Download EPUB
@@ -312,6 +411,11 @@ export function SearchView(props: SearchViewProps) {
                       <span class="story-snippet">{hit.snippet}</span>
                     ) : null}
                   </span>
+                  {/* The same marker as the edition list. A search result is
+                      the same destination reached another way, and a glyph
+                      that means one thing on one list and nothing on another
+                      is worse than no glyph. */}
+                  <SavedMark href={`/story/${hit.id}`} />
                 </a>
               </li>
             ))}
@@ -343,8 +447,9 @@ export function OfflineView() {
       <h1 class="page-title">Offline</h1>
       <p class="page-sub">This page has not been saved to your device.</p>
       <p class="offline-note">
-        Pages you have already opened stay available offline. To keep a whole
-        edition, open it while connected and use <strong>Save for offline</strong>.
+        Pages you have already opened stay available offline for{" "}
+        {CACHE_MAX_AGE_DAYS} days. To keep a whole edition, open it while
+        connected and use <strong>Save the whole edition</strong>.
       </p>
       <p class="actions">
         <a class="btn btn-primary" href="/">

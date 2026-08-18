@@ -4,6 +4,7 @@ import { readFont } from "~/web/fonts";
 import { Shell, pageAttrs } from "~/web/layout";
 import { longDate } from "~/web/format";
 import { rssEditionPath } from "~/rss/channel";
+import { estimateEditionSave } from "~/web/size";
 import { EditionView, NotFoundView } from "~/web/views";
 import { readTheme } from "~/web/theme";
 
@@ -51,6 +52,7 @@ export default defineHandler((event) => {
           date={date}
           today={today()}
           stories={stories}
+          save={estimateEditionSave(date)}
           subtitle={longDate(date)}
         />
       </Shell>

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { resetConfig, setConfigForTests } from "~/config";
 import type { StoryRow } from "~/core/edition";
 import {
+  byteSize,
   editionHeading,
   longDate,
   plural,
@@ -283,5 +284,43 @@ describe("readingTime", () => {
     expect(readingTime(Number.NaN)).toBeNull();
     expect(readingTime(Number.POSITIVE_INFINITY)).toBeNull();
     expect(readingTime(-500)).toBeNull();
+  });
+});
+
+describe("byteSize", () => {
+  test("uses powers of 1024, as the rest of the codebase does", () => {
+    expect(byteSize(1024)).toBe("1 KB");
+    expect(byteSize(1024 * 1024)).toBe("1.0 MB");
+    // 1000 is not a kilobyte here, and saying so would make the offline
+    // estimate disagree with every other byte count in the project.
+    expect(byteSize(1000)).toBe("1000 bytes");
+  });
+
+  test("prints one decimal place above a megabyte and none below", () => {
+    // The estimate this formats is accurate to a couple of percent, so a
+    // second decimal would be a claim about precision it does not have.
+    expect(byteSize(4_404_019)).toBe("4.2 MB");
+    expect(byteSize(1_190_275)).toBe("1.1 MB");
+    expect(byteSize(300_000)).toBe("293 KB");
+  });
+
+  test("rounds rather than truncates, so nothing is ever 0 KB", () => {
+    expect(byteSize(1023)).toBe("1023 bytes");
+    expect(byteSize(1500)).toBe("1 KB");
+    expect(byteSize(1024 * 1024 - 1)).toBe("1024 KB");
+  });
+
+  test("says bytes, plurally, below a kilobyte", () => {
+    expect(byteSize(0)).toBe("0 bytes");
+    expect(byteSize(1)).toBe("1 byte");
+    expect(byteSize(512)).toBe("512 bytes");
+  });
+
+  test("treats a nonsensical count as nothing rather than printing NaN", () => {
+    // The input is arithmetic over database columns; a null column that got
+    // through would otherwise reach a reader as "NaN MB".
+    expect(byteSize(Number.NaN)).toBe("0 bytes");
+    expect(byteSize(Number.POSITIVE_INFINITY)).toBe("0 bytes");
+    expect(byteSize(-1)).toBe("0 bytes");
   });
 });

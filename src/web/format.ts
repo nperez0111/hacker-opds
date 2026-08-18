@@ -91,6 +91,28 @@ export function submittedAt(story: StoryRow, tz = config().editionTz): string {
   );
 }
 
+/**
+ * A byte count as a reader would say it.
+ *
+ * Powers of 1024 and the `KB`/`MB` spellings, because that is what the rest of
+ * this codebase already says when it talks about bytes (`src/search/text.ts:11`,
+ * `scripts/build-ops.ts:88`) and a site that measures the same thing two ways
+ * is a site that has to be read twice.
+ *
+ * Exactly one decimal place above a megabyte and none below it. The only
+ * caller is the offline-save estimate, which is accurate to within a couple of
+ * percent (see `~/web/size`); `4.2 MB` claims about that much precision, while
+ * `4.23 MB` would claim ten times more than the number has and `4 MB` would
+ * throw away a distinction the reader can act on.
+ */
+export function byteSize(bytes: number): string {
+  const n = Number.isFinite(bytes) ? Math.max(0, bytes) : 0;
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  // Rounded rather than truncated, so 1023 bytes is "1 KB" and not "0 KB".
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return plural(Math.round(n), "byte");
+}
+
 /** Rough reading time. Only shown when extraction actually produced text. */
 export function readingTime(words: number): string | null {
   if (!Number.isFinite(words) || words < 100) return null;

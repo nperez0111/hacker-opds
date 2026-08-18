@@ -24,6 +24,8 @@ import {
   MANIFEST_URL,
 } from "~/web/assets";
 import { DEFAULT_FONT, FONT_CSS_URL, type FontId } from "~/web/fonts";
+import { CACHE_MAX_AGE_DAYS } from "~/web/offline";
+import type { EditionSaveSize } from "~/web/size";
 import { SITE_NAME, SOURCE_URL, Shell, isCurrentSection, pageAttrs } from "~/web/layout";
 import type { Theme } from "~/web/theme";
 import {
@@ -88,6 +90,20 @@ function comment(over: Partial<CommentRow> = {}): CommentRow {
     ...over,
   };
 }
+
+/**
+ * A save estimate, since the button is required to state its cost.
+ *
+ * The numbers are a real edition's: 4,404,019 bytes stored, and that over the
+ * 3.7 the estimator divides by for the wire. Written out rather than derived so
+ * the two assertions that read them off the rendered page are checking the
+ * formatting, not repeating the arithmetic.
+ */
+const SAVE: EditionSaveSize = {
+  pages: 31,
+  storageBytes: 4_404_019,
+  wireBytes: 1_190_275,
+};
 
 /**
  * Asserts the mono-jsx contract before unwrapping.
@@ -503,7 +519,7 @@ describe("EditionView", () => {
 
   test("heads the page with the relative day and the exact date under it", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     expect(main).toContain('<h1 class="page-title">Today</h1>');
     expect(main).toContain('<p class="page-sub">Sunday, 16 August 2026</p>');
@@ -516,6 +532,7 @@ describe("EditionView", () => {
           date="2026-08-10"
           today="2026-08-16"
           stories={stories}
+          save={SAVE}
           subtitle="Monday, 10 August 2026"
         />,
       ),
@@ -525,12 +542,17 @@ describe("EditionView", () => {
 
   test("counts the stories", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     expect(main).toContain("3 stories");
     const one = mainOf(
       await renderPage(
-        <EditionView date="2026-08-16" today="2026-08-16" stories={[stories[0] as StoryRow]} />,
+        <EditionView
+          date="2026-08-16"
+          today="2026-08-16"
+          stories={[stories[0] as StoryRow]}
+          save={SAVE}
+        />,
       ),
     );
     expect(one).toContain("1 story");
@@ -539,7 +561,7 @@ describe("EditionView", () => {
 
   test("offers the whole edition as one download", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     expect(main).toContain('href="/epub/edition/2026-08-16.epub"');
     expect(main).toContain("Download this edition (3 stories, EPUB)");
@@ -547,14 +569,14 @@ describe("EditionView", () => {
 
   test("does not offer a download for an edition with nothing in it", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={[]} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={[]} save={SAVE} />),
     );
     expect(main).not.toContain("/epub/edition/");
   });
 
   test("ranks the rows by position, one-based", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     expect(main).toContain('<span class="rank">1</span>');
     expect(main).toContain('<span class="rank">2</span>');
@@ -565,7 +587,7 @@ describe("EditionView", () => {
   test("makes the whole row one link to the story page", async () => {
     // An e-reader's touch layer is imprecise; the target is the entire block.
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     expect(main).toContain('<a class="story-link" href="/story/1">');
     expect(main).toContain('<a class="story-link" href="/story/3">');
@@ -574,7 +596,7 @@ describe("EditionView", () => {
 
   test("prints the title and the meta line for each row", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     expect(main).toContain('<span class="story-title">First story</span>');
     expect(main).toContain(
@@ -591,6 +613,7 @@ describe("EditionView", () => {
           date="2026-08-16"
           today="2026-08-16"
           stories={[story({ title: '<img src=x onerror="alert(1)">' })]}
+          save={SAVE}
         />,
       ),
     );
@@ -600,7 +623,7 @@ describe("EditionView", () => {
 
   test("says so when an edition has no stories", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={[]} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={[]} save={SAVE} />),
     );
     expect(main).toContain("This edition has no stories yet.");
     expect(main).not.toContain("<ol");
@@ -613,7 +636,7 @@ describe("EditionView - offline save list", () => {
 
   test("carries a valid JSON array on the save button", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     const raw = attr(main, "data-save-edition");
     expect(raw).not.toBeNull();
@@ -623,7 +646,7 @@ describe("EditionView - offline save list", () => {
 
   test("is the archive URL plus one story page each, in order", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     const urls = JSON.parse(attr(main, "data-save-edition") as string) as string[];
     expect(urls).toEqual([
@@ -636,7 +659,7 @@ describe("EditionView - offline save list", () => {
 
   test("every entry is a same-site path the worker can fetch", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     const urls = JSON.parse(attr(main, "data-save-edition") as string) as string[];
     for (const url of urls) {
@@ -647,7 +670,7 @@ describe("EditionView - offline save list", () => {
 
   test("every story on the page is in the list", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     const urls = JSON.parse(attr(main, "data-save-edition") as string) as string[];
     for (const s of stories) expect(urls).toContain(`/story/${s.id}`);
@@ -656,7 +679,7 @@ describe("EditionView - offline save list", () => {
 
   test("the controls start hidden, for the reader with no worker", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
     );
     expect(main).toContain("data-offline-ui");
     expect(main).toContain("hidden");
@@ -665,11 +688,106 @@ describe("EditionView - offline save list", () => {
 
   test("still emits a well-formed list for an empty edition", async () => {
     const main = mainOf(
-      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={[]} />),
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={[]} save={SAVE} />),
     );
     expect(JSON.parse(attr(main, "data-save-edition") as string)).toEqual([
       "/archive/2026-08-16",
     ]);
+  });
+});
+
+describe("EditionView - what the save button costs", () => {
+  const stories = [story({ id: 11 }), story({ id: 22 })];
+
+  async function render(): Promise<string> {
+    return mainOf(
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
+    );
+  }
+
+  test("puts the download figure on the button itself", async () => {
+    // The wire figure, not the storage one. Since brotli landed the two differ
+    // by about 4x - the worker's fetch decodes transparently - and the question
+    // the button is answering is "can I afford to press this right now".
+    expect(await render()).toContain("Save the whole edition (up to 1.1 MB)");
+  });
+
+  test('says "up to", because the worker skips what is already here', async () => {
+    // Pages opened while reading were cached as they were read, so the true
+    // cost is this number or less and never more.
+    expect(await render()).toContain("up to");
+  });
+
+  test("states the storage cost, which is the other question", async () => {
+    expect(await render()).toContain("about 4.2 MB on the device");
+  });
+
+  test("says that opening a page already saves it", async () => {
+    // The label used to be "Save for offline", which collided with the fact
+    // that visited pages are saved automatically and made the button look like
+    // the only way anything is kept.
+    const main = await render();
+    expect(main).toContain("Pages are saved as you open them");
+    expect(main).not.toContain("Save for offline");
+  });
+
+  test("prints the legend for the marker, where a title attribute cannot reach", async () => {
+    expect(await render()).toContain("\u2193 marks a story that is already saved");
+  });
+
+  test("names the retention period from the one place it is defined", async () => {
+    expect(await render()).toContain(`kept for ${CACHE_MAX_AGE_DAYS} days`);
+  });
+
+  test("hides the note along with the button, for a reader with no worker", async () => {
+    // Copy about a control that is not on the page is worse than no copy.
+    const main = await render();
+    expect(main).toContain('<p class="offline-note" data-offline-ui hidden>');
+  });
+});
+
+describe("EditionView - the saved marker", () => {
+  const stories = [story({ id: 11 }), story({ id: 22 })];
+
+  async function render(): Promise<string> {
+    return mainOf(
+      await renderPage(<EditionView date="2026-08-16" today="2026-08-16" stories={stories} save={SAVE} />),
+    );
+  }
+
+  test("ships one per row, hidden, naming the URL to look up", async () => {
+    // Whether a page is on the device is knowable only from the Cache API, so
+    // the marker cannot be server-rendered visible: on a first visit it would
+    // be a claim about storage that is false for every row.
+    const main = await render();
+    expect(main).toContain('data-saved-mark="/story/11"');
+    expect(main).toContain('data-saved-mark="/story/22"');
+    expect(main.match(/data-saved-mark=/g)).toHaveLength(2);
+    expect(main.match(/class="saved"[^>]*hidden/g)).toHaveLength(2);
+  });
+
+  test("carries an accessible name and a title, not a bare glyph", async () => {
+    // A lone arrow means nothing to a screen reader, and nothing to a sighted
+    // reader who has not seen the legend.
+    const main = await render();
+    expect(main).toContain('role="img"');
+    expect(main).toContain('aria-label="Saved on this device"');
+    expect(main).toContain('title="Saved on this device"');
+  });
+
+  test("sits inside the row's anchor, so it joins the link's name", async () => {
+    const main = await render();
+    const row = main.slice(main.indexOf('href="/story/11"'), main.indexOf("</a>"));
+    expect(row).toContain('data-saved-mark="/story/11"');
+  });
+
+  test("comes after the title and meta, not inside them", async () => {
+    // In the title it would re-wrap the headline when it appeared; as the
+    // row's own column it lines up down the page and moves nothing.
+    const main = await render();
+    expect(main.indexOf('class="story-meta"')).toBeLessThan(
+      main.indexOf('data-saved-mark="/story/11"'),
+    );
   });
 });
 
@@ -839,6 +957,26 @@ describe("StoryView", () => {
     expect(main).toContain("No comments were available when this edition was built.");
   });
 
+  test("carries its own saved marker in the page header", async () => {
+    // The repo owner asked for the glyph "next to it on the list item & in the
+    // page header". Here there is room, so the words are printed rather than
+    // hidden behind an accessible name - which is also where a reader finds
+    // out what the arrow in the list meant.
+    const main = await render();
+    expect(main).toContain(
+      `<p class="meta saved-line" data-saved-mark="/story/${story().id}" hidden>`,
+    );
+    expect(main).toContain("Saved on this device");
+    expect(main).toContain('<span class="saved-glyph" aria-hidden="true">\u2193</span>');
+  });
+
+  test("puts the marker inside the header, above the buttons", async () => {
+    const main = await render();
+    const head = main.slice(main.indexOf("<header"), main.indexOf("</header>"));
+    expect(head).toContain("data-saved-mark");
+    expect(head.indexOf("data-saved-mark")).toBeLessThan(head.indexOf('class="actions"'));
+  });
+
   test("escapes a hostile title in the heading", async () => {
     const main = await render({ story: story({ title: "<script>alert(1)</script>" }) });
     expect(main).not.toContain("<script>alert(1)</script>");
@@ -851,7 +989,9 @@ describe("OfflineView", () => {
     const main = mainOf(await renderPage(<OfflineView />));
     expect(main).toContain('<h1 class="page-title">Offline</h1>');
     expect(main).toContain("This page has not been saved to your device.");
-    expect(main).toContain("Save for offline");
+    // Names the control by the label the edition page actually puts on it.
+    expect(main).toContain("Save the whole edition");
+    expect(main).toContain(`for ${CACHE_MAX_AGE_DAYS} days`);
   });
 
   test("offers the two pages most likely to be cached", async () => {

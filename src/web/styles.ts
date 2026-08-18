@@ -998,10 +998,62 @@ html[data-sw="ready"] [data-offline-ui] {
   display: inline-flex;
 }
 
+/*
+ * The note under the button is prose, not a control, so it takes the block
+ * back off the inline-flex above. Same attribute because it has the same
+ * condition attached: it explains a button that is not there without a worker.
+ */
+html[data-sw="ready"] p.offline-note[data-offline-ui] {
+  display: block;
+}
+
 .offline-note {
   font-size: 0.8rem;
   color: var(--fg-soft);
   margin: 0.5rem 0 0;
+}
+
+/*
+ * The marker for a page that is already on the device.
+ *
+ * There is no data-sw gate on this one, unlike the save button. The button is
+ * hidden until the worker registers because an inert control is worse than no
+ * control; a marker is hidden until the page-side script has *looked in the
+ * cache and found it*, which is a stronger condition and cannot be true
+ * without a worker anyway. So the reveal is the script removing the hidden
+ * attribute, and the rule below is the only thing standing between that and a
+ * browser whose UA stylesheet does not carry [hidden] - which is a real
+ * possibility on this hardware and would otherwise show an arrow next to
+ * every story on the site.
+ */
+[data-saved-mark][hidden] {
+  display: none;
+}
+
+/*
+ * A column of its own at the end of the row, not something appended to the
+ * title. Fixed width so the arrows line up down the page and so a row that
+ * gains one does not re-wrap its headline; baseline-aligned by the flex
+ * container, so the arrow sits on the same line as the first line of title.
+ *
+ * Bold for the same reason the rules on this site are 2px: at this size on a
+ * greyscale panel an arrow at normal weight is three or four grey pixels and
+ * reads as dirt on the screen rather than as a mark.
+ */
+.saved,
+.saved-glyph {
+  font-weight: 700;
+}
+
+.saved {
+  flex: 0 0 auto;
+  width: 1.2rem;
+  text-align: right;
+}
+
+/* The spelled-out version in a story page's header. */
+.saved-line {
+  margin-top: 0.35rem;
 }
 
 /* ------------------------------------------------------------------ */
