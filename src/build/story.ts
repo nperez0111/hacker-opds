@@ -11,7 +11,8 @@
 import { errFields, log } from "~/log";
 import { fetchStoryTreeHtml, HnThrottled } from "~/core/hn-html";
 import { flattenComments, getComments, groupThreads, saveComments } from "~/core/comments";
-import { bookAuthor, getStory, type StoryRow } from "~/core/edition";
+import { bookAuthor, getStory, shiftDate, today, type StoryRow } from "~/core/edition";
+import { getDb } from "~/db/client";
 import { extractArticle, getArticle, saveArticle, type ArticleRecord } from "~/core/extract";
 import { buildEpub, type EpubResource, type EpubTocEntry } from "~/epub/package";
 import {
@@ -280,4 +281,43 @@ export function buildStoryEpub(
       throw err;
     }
   });
+}
+
+/**
+ * Stories in recent editions that have no EPUB, newest edition first.
+ *
+ * The prewarm task's build loop is nested inside its ingest loop, and the
+ * ingest loop is driven by `dueEditions()`, which only returns days that are
+ * missing or still `pending`. So the moment `ingestEdition` marks a day
+ * `ingested` the background builder never looks at it again: anything that did
+ * not get built on that one pass -- because HN was throttling, because the
+ * process was restarted, because the day was ingested by hand with the metadata
+ * -only script -- stayed unbuilt forever, and took its edition's digest down
+ * with it (`editionsNeedingDigest` needs every story ready). This makes the
+ * build pass self-determining in the same way the digest pass already is.
+ *
+ * `building` is excluded because another process may legitimately be mid-build;
+ * `reapStaleBuilds` is what rescues one that is not. `failed` is *not*
+ * excluded, matching `editionsNeedingDigest`: a failure is more often a swept
+ * cache or a bad minute upstream than a permanently unbuildable story, and the
+ * per-run cap the caller applies bounds what a genuinely hopeless one costs.
+ */
+export function storiesNeedingBuild(lookbackDays = 7, limit = 100): number[] {
+  const floor = shiftDate(today(config().editionTz), -lookbackDays);
+  return getDb()
+    .query<{ id: number }, [string, number]>(
+      `SELECT s.id FROM stories s
+         JOIN editions e ON e.date = s.edition_date
+        WHERE e.state != 'pending'
+          AND s.edition_date >= ?
+          AND NOT EXISTS (
+                SELECT 1 FROM builds b
+                 WHERE b.kind = 'story'
+                   AND b.build_key = CAST(s.id AS TEXT)
+                   AND b.state IN ('ready', 'building'))
+        ORDER BY s.edition_date DESC, s.rank ASC
+        LIMIT ?`,
+    )
+    .all(floor, limit)
+    .map((row) => row.id);
 }

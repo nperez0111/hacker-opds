@@ -137,8 +137,9 @@ bun run ingest 2026-08-16      # a specific day
 bun run ingest 2026-08-16 --build   # ingest, then build every EPUB and the digest
 ```
 
-Without `--build` the hourly prewarm task picks the edition up, or you can just
-request a book and it will build on demand. `--build` only writes the day's
+Without `--build` the hourly prewarm task picks the edition up — it sweeps up to
+30 unbuilt stories per run, so a few days of backfill clear over a morning — or
+you can just request a book and it will build on demand. `--build` only writes the day's
 digest if every story succeeded — a digest with a hole in it would otherwise be
 cached and served as though it were complete.
 
@@ -323,6 +324,10 @@ is enforced *within* a process — a second one shares neither the queue nor the
 cool-off that a 403 sets, so it doubles the request rate against HN and keeps
 knocking while the first process is politely waiting. Ingest the day and let
 prewarm build it, or run `--build` knowing the server is idle.
+
+If HN does start refusing, you will see it: the throttle logs at `warn`, and a
+run parks as soon as the first build is deferred rather than spending the full
+`HN_MAX_WAIT_MS` budget on each remaining story in turn.
 
 ## Design notes
 

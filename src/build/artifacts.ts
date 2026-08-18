@@ -7,6 +7,7 @@
  * here is the ETag source.
  */
 
+import { config } from "~/config";
 import { blobPath, ensureDirs, getDb } from "~/db/client";
 
 export type BuildKind = "story" | "edition";
@@ -82,15 +83,29 @@ export function markBuilding(kind: BuildKind, key: string | number): void {
   );
 }
 
+/**
+ * An upsert rather than the obvious `UPDATE ... WHERE`, because the row this
+ * finishes is not guaranteed to still be there. `reapStaleBuilds` deletes
+ * `building` rows it judges abandoned, and its judgement is a timeout: a build
+ * that outlives the threshold is still running and will still finish. With an
+ * UPDATE that finish matched no rows, and the `getBuild(...)!` below returned
+ * null through a non-null assertion -- a TypeError in the caller, several
+ * frames from the cause. Re-creating the row costs nothing and makes the
+ * reaper's threshold a performance question instead of a correctness one.
+ */
 export function markReady(
   kind: BuildKind,
   key: string | number,
   info: { path: string; bytes: number; sha256: string },
 ): BuildRow {
+  const at = Math.floor(Date.now() / 1000);
   getDb().run(
-    `UPDATE builds SET state = 'ready', finished_at = ?, path = ?, bytes = ?, sha256 = ?, error = NULL
-     WHERE kind = ? AND build_key = ?`,
-    [Math.floor(Date.now() / 1000), info.path, info.bytes, info.sha256, kind, String(key)],
+    `INSERT INTO builds (kind, build_key, state, started_at, finished_at, path, bytes, sha256, error)
+     VALUES (?, ?, 'ready', ?, ?, ?, ?, ?, NULL)
+     ON CONFLICT(kind, build_key) DO UPDATE SET
+       state = 'ready', finished_at = excluded.finished_at, path = excluded.path,
+       bytes = excluded.bytes, sha256 = excluded.sha256, error = NULL`,
+    [kind, String(key), at, at, info.path, info.bytes, info.sha256],
   );
   return getBuild(kind, key)!;
 }
@@ -122,6 +137,55 @@ export function markFailed(kind: BuildKind, key: string | number, error: string)
  */
 export function clearBuild(kind: BuildKind, key: string | number): void {
   getDb().run("DELETE FROM builds WHERE kind = ? AND build_key = ?", [kind, String(key)]);
+}
+
+/**
+ * How long a `building` row may sit before it is presumed abandoned.
+ *
+ * Derived from `hnMaxWaitMs` rather than hard-coded, because that is what
+ * actually bounds a legitimate build: a story throttled by HN waits out its
+ * whole budget before giving up. Double it, with an hour as the floor, so the
+ * threshold still has headroom if the budget is configured down.
+ */
+export function staleBuildMs(): number {
+  return Math.max(2 * config().hnMaxWaitMs, 60 * 60 * 1000);
+}
+
+/**
+ * Drops `building` rows whose build cannot still be running.
+ *
+ * Nothing else cleans these up. `started_at` was written and never read back,
+ * so a process killed mid-build -- a container restart, an OOM, an operator
+ * with a `docker exec` and second thoughts -- left a `building` row forever.
+ * That row is not merely untidy: `editionsNeedingDigest` requires every story
+ * to be `ready`, and `building` is not `ready`, so one abandoned story silently
+ * withholds its entire edition's digest until the day ages out of retention.
+ * Observed in production on 2026-08-14, where two stories held back a
+ * completed 30-story edition.
+ *
+ * Deletes rather than marking `failed`, matching `clearBuild`: nothing is known
+ * to be wrong with the story, so the honest state is "unbuilt", which is also
+ * the state that lets the sweep in the prewarm task pick it up again.
+ *
+ * Safe against a false positive -- a build that outlives the threshold and then
+ * succeeds re-creates its row through `markReady`.
+ */
+export function reapStaleBuilds(olderThanMs = staleBuildMs()): BuildRow[] {
+  const cutoff = Math.floor((Date.now() - olderThanMs) / 1000);
+  const db = getDb();
+  // Selected before deleting so the caller can say which builds were reaped.
+  // A silent reaper would replace one invisible failure mode with another.
+  const stale = db
+    .query<BuildRow, [number]>(
+      "SELECT * FROM builds WHERE state = 'building' AND started_at IS NOT NULL AND started_at < ?",
+    )
+    .all(cutoff);
+  if (stale.length === 0) return [];
+
+  db.run("DELETE FROM builds WHERE state = 'building' AND started_at IS NOT NULL AND started_at < ?", [
+    cutoff,
+  ]);
+  return stale;
 }
 
 /** Writes bytes to disk and returns the facts needed for the ledger. */

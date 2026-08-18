@@ -304,7 +304,14 @@ async function fetchPage(
         throw new HnThrottled(wait);
       }
 
-      log("hn-html").debug(
+      // Deliberately `warn`, not `debug`. At the default log level a debug line
+      // here is invisible, and because nothing else prints between the start of
+      // a build and its result, a throttled run is indistinguishable from a
+      // hung process for the full `hnMaxWaitMs` budget -- half an hour of
+      // silence. That happened, twice, and cost more than the log volume ever
+      // will: the ladder tops out at 120s, so a blocked host emits well under a
+      // line a minute per in-flight request.
+      log("hn-html").warn(
         { url, status: res.status, attempt, waitMs: wait },
         "hn throttled, waiting",
       );
