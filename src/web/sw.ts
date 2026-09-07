@@ -19,6 +19,7 @@ import { manifestIcons } from "~/web/icons";
 import {
   CACHED_AT_HEADER,
   CACHED_BYTES_HEADER,
+  FRESH_FOR_HEADER,
   CACHE_MAX_AGE_MS,
   CACHE_MAX_BYTES,
   CACHE_SWEEP_INTERVAL_MS,
@@ -64,6 +65,7 @@ var MAX_BYTES = ${CACHE_MAX_BYTES};
 var SWEEP_EVERY_MS = ${CACHE_SWEEP_INTERVAL_MS};
 var STAMP_HEADER = ${JSON.stringify(CACHED_AT_HEADER)};
 var BYTES_HEADER = ${JSON.stringify(CACHED_BYTES_HEADER)};
+var FRESH_FOR_HEADER = ${JSON.stringify(FRESH_FOR_HEADER)};
 var SWEEP_MARK = ${JSON.stringify(SWEEP_MARK_URL)};
 
 /*
@@ -100,8 +102,9 @@ function isProtected(url) {
 }
 
 /*
- * Rewrite a response with the two facts eviction needs: when this device
- * stored it, and how big it is.
+ * Rewrite a response with the three facts eviction needs: when this device
+ * stored it, how big it is, and how long the server promised to keep serving
+ * the same bytes.
  *
  * The alternative was the response's own Date header, and it is the wrong
  * clock twice - it is the origin's, and for a cache-first page refreshed in
@@ -113,18 +116,39 @@ function isProtected(url) {
  * a new one, which means reading the body. That read is also where the byte
  * count comes from - so the size cap, which would otherwise need a pass that
  * reads every body back, is free.
+ *
+ * The freshness promise is the origin's own cache-control max-age, copied
+ * through. The server sends max-age=86400 on story pages and a year on hashed
+ * assets, so honouring it is what lets the cache-first path skip the
+ * revalidation fetch it used to make on every hit - which was the cost paid
+ * for a page that never changes. An origin that declares nothing gets 0, the
+ * conservative reading.
  */
 function stamped(response, now) {
   return response.blob().then(function (body) {
     var headers = new Headers(response.headers);
     headers.set(STAMP_HEADER, String(now));
     headers.set(BYTES_HEADER, String(body.size));
+    headers.set(FRESH_FOR_HEADER, String(originMaxAge(response)));
     return new Response(body, {
       status: response.status,
       statusText: response.statusText,
       headers: headers
     });
   });
+}
+
+/* The origin's max-age, in seconds. Anything unparseable is no promise at all. */
+function originMaxAge(response) {
+  var control = response.headers.get("cache-control") || "";
+  var match = /max-age=(\\d+)/.exec(control);
+  return match ? Number(match[1]) : 0;
+}
+
+/* Seconds this entry stays trustworthy, from its own stamp. */
+function freshFor(response) {
+  var seconds = response ? Number(response.headers.get(FRESH_FOR_HEADER)) : 0;
+  return seconds > 0 ? seconds : 0;
 }
 
 /* Epoch milliseconds this entry was stored, or 0 when it cannot be dated. */
@@ -405,13 +429,34 @@ function put(request, response) {
 }
 
 function cacheFirst(request) {
+  /*
+   * A reload asks for new bytes outright, and the browser marks the request
+   * "reload" to say so. Honouring it here is what makes the browser's own
+   * refresh button work against a cache-first page: without this check the
+   * reload would be answered from storage like any other hit, and the reader
+   * staring at a stale page has no way out but waiting for the cache to age.
+   * Old browsers that do not set .cache fall through to the normal paths.
+   */
+  var reload = request.cache === "reload";
   return caches.match(request).then(function (hit) {
-    if (hit && !isExpired(hit, Date.now())) {
+    if (hit && !reload && !isExpired(hit, Date.now())) {
+      if (Date.now() - cachedAt(hit) <= freshFor(hit) * 1000) {
+        /*
+         * Inside the freshness the origin itself declared, so serving from
+         * storage is not a staleness gamble, it is what the server said to
+         * do. This gate is the difference between a cache-first page costing
+         * a network round trip on every read and costing one a day.
+         */
+        return hit;
+      }
       /*
-       * Refresh in the background anyway. The page is immutable, but the
-       * server may have gained an article extraction or a cover since, and
-       * this costs the reader nothing. The refresh re-stamps the entry, so a
-       * page that is read regularly never ages out from under its reader.
+       * Freshness has run out. Refresh in the background anyway: the page is
+       * immutable, but the server may have gained an article extraction or a
+       * cover since, and this costs the reader nothing. The refresh re-stamps
+       * the entry, so a page that is read regularly never ages out from under
+       * its reader. An entry with no freshness stamp at all - the precache,
+       * or anything stored by an older worker - is always past its window,
+       * so it keeps the old behaviour of revalidating on every read.
        */
       fetch(request)
         .then(function (res) {
@@ -421,24 +466,29 @@ function cacheFirst(request) {
       return hit;
     }
     if (hit) {
+      var expired = isExpired(hit, Date.now());
       /*
-       * Past its thirty days. Deleted here rather than left for the next
-       * sweep, because this is the moment the space is known to be reclaimable
-       * and the sweep may be a day away.
+       * Past its thirty days, or the reader explicitly asked for new bytes.
+       * An expired entry is deleted here rather than left for the next sweep,
+       * because this is the moment the space is known to be reclaimable and
+       * the sweep may be a day away. A reload keeps its still-valid fallback.
        *
        * The stale copy is still returned if the network then fails. Losing the
        * radio in the same second a page aged out should not cost the reader
-       * the page - the entry is gone from storage either way, which is the
-       * part the quota cares about.
+       * the page. An expired entry is gone from storage either way, which is
+       * the part the quota cares about.
        */
-      caches
-        .open(CACHE)
-        .then(function (cache) {
-          return cache.delete(request);
-        })
-        .catch(function () {});
+      if (expired) {
+        caches
+          .open(CACHE)
+          .then(function (cache) {
+            return cache.delete(request);
+          })
+          .catch(function () {});
+      }
       return fetch(request)
         .then(function (res) {
+          if (reload && res.status !== 200) return hit;
           return put(request, res);
         })
         .catch(function () {
@@ -547,8 +597,59 @@ self.addEventListener("fetch", function (event) {
  * from can grow its markers as the save walks down it, rather than showing
  * thirty at once on the next navigation.
  */
+/*
+ * Emptying the cache, on the page's say-so.
+ *
+ * This is the backstop behind every other freshness rule: the pull gesture on
+ * a touch device sends one message, everything the server can still serve is
+ * dropped, and the reload that follows shows bytes fetched seconds ago. It
+ * exists because no retention policy can anticipate every way a server changes
+ * its mind, and "clear the cache" is the fix a reader can be told in one
+ * sentence.
+ *
+ * What survives is deliberate. The precache is the app shell - deleting it
+ * leaves a reader offline with a browser error page until the next install,
+ * which purge cannot trigger. The hashed assets cannot go stale (a change to
+ * them is a different URL), so dropping them only costs re-downloads. The
+ * sweep mark is bookkeeping, not content.
+ *
+ * The dropped count is reported back so the page knows the purge finished
+ * before it reloads - reloading on a promise that has not resolved can race
+ * the deletions and show the same stale page again.
+ */
+function purgeCache(cache) {
+  return cache.keys().then(function (keys) {
+    var drops = [];
+    for (var i = 0; i < keys.length; i++) {
+      var path = new URL(keys[i].url).pathname;
+      if (isProtected(keys[i].url) || isAsset(path)) continue;
+      drops.push(keys[i]);
+    }
+    return Promise.all(
+      drops.map(function (request) {
+        return cache.delete(request);
+      })
+    ).then(function () {
+      return drops.length;
+    });
+  });
+}
+
 self.addEventListener("message", function (event) {
   var data = event.data || {};
+  if (data.type === "purge-cache") {
+    var client = event.source;
+    event.waitUntil(
+      caches.open(CACHE).then(function (cache) {
+        return purgeCache(cache).then(function (dropped) {
+          if (client) {
+            client.postMessage({ type: "cache-purged", dropped: dropped });
+          }
+        });
+      })
+    );
+    return;
+  }
   if (data.type !== "save-urls" || !data.urls || !data.urls.length) return;
 
   var urls = data.urls;
@@ -1006,8 +1107,137 @@ export const APP_JS = `/* hacker-opds */
     next(0);
   }
 
+  /*
+   * Pull to refresh, for touch devices.
+   *
+   * The worker's retention rules are automatic and conservative; this is the
+   * manual override, the gesture a reader already knows from every native
+   * app. Pull down from the top of a page and the cache is emptied of
+   * everything but the app shell, then the page reloads - so a server that
+   * changed its mind about something is corrected in one motion, without a
+   * settings page to find.
+   *
+   * Touch only, because a wheel and a scrollbar are a poor proxy for intent:
+   * a mouse user who drags a scrollbar to the top has not asked for anything.
+   * The indicator is inline-styled from the script rather than the stylesheet
+   * so the gesture carries no cost for the majority of pages where scripting
+   * is off or the device has no touch screen.
+   *
+   * The reload waits for the worker's reply, because reloading on a purge
+   * that has not finished can race the deletions and re-show the very stale
+   * page being purged. Timers bound that wait - the shorter one covers a
+   * worker that never replies, the longer one a browser that ignored the
+   * first reload - so the gesture can never leave the reader stuck.
+   */
+  function wirePull() {
+    if (!("ontouchstart" in window)) return;
+
+    var THRESHOLD = 96; /* effective pixels of pull before it counts */
+    var CAP = 64; /* the indicator stops growing here */
+    var RESISTANCE = 0.5; /* half of every dragged pixel */
+    var REPLY_MS = 1500; /* how long a purge has to answer */
+    var BAIL_MS = 3000; /* reload anyway, whatever else went wrong */
+    var BAR_STYLE =
+      "position:fixed;top:0;left:0;right:0;background:#000;" +
+      "z-index:2147483647;pointer-events:none;height:0;";
+
+    var busy = false;
+    var pulling = false;
+    var startY = 0;
+    var pulled = 0;
+    var bar = null;
+
+    function indicator() {
+      if (bar) return bar;
+      bar = document.createElement("div");
+      bar.setAttribute("aria-hidden", "true");
+      bar.setAttribute("style", BAR_STYLE);
+      document.body.appendChild(bar);
+      return bar;
+    }
+
+    function grow(amount) {
+      var height = amount > CAP ? CAP : amount;
+      indicator().setAttribute("style", BAR_STYLE + "height:" + Math.round(height) + "px;");
+    }
+
+    function settle() {
+      pulling = false;
+      startY = 0;
+      pulled = 0;
+      if (bar) bar.setAttribute("style", BAR_STYLE);
+    }
+
+    function purge() {
+      busy = true;
+      if (navigator.onLine === false) {
+        window.location.reload();
+        return;
+      }
+      var reloaded = false;
+      function go() {
+        if (reloaded) return;
+        reloaded = true;
+        window.location.reload();
+      }
+      function onMessage(event) {
+        if ((event.data || {}).type !== "cache-purged") return;
+        navigator.serviceWorker.removeEventListener("message", onMessage);
+        clearTimeout(reply);
+        clearTimeout(bail);
+        go();
+      }
+      var reply = setTimeout(go, REPLY_MS);
+      var bail = setTimeout(go, BAIL_MS);
+      navigator.serviceWorker.addEventListener("message", onMessage);
+      navigator.serviceWorker.ready.then(function (registration) {
+        var worker = registration.active;
+        if (worker) worker.postMessage({ type: "purge-cache" });
+      });
+    }
+
+    document.addEventListener("touchstart", function (event) {
+      if (busy || event.touches.length !== 1) return;
+      var top =
+        window.pageYOffset || document.documentElement.scrollTop || 0;
+      if (top > 0) {
+        settle();
+        return;
+      }
+      startY = event.touches[0].clientY;
+      pulling = true;
+    });
+
+    document.addEventListener(
+      "touchmove",
+      function (event) {
+        if (!pulling || busy) return;
+        var delta = event.touches[0].clientY - startY;
+        if (delta <= 0) {
+          if (pulled) indicator().setAttribute("style", BAR_STYLE);
+          pulled = 0;
+          return;
+        }
+        pulled = delta * RESISTANCE;
+        grow(pulled);
+        if (event.cancelable) event.preventDefault();
+      },
+      { passive: false }
+    );
+
+    document.addEventListener("touchend", function () {
+      if (!pulling) return;
+      var amount = pulled;
+      settle();
+      if (amount >= THRESHOLD && !busy) purge();
+    });
+
+    document.addEventListener("touchcancel", settle);
+  }
+
   function wire() {
     scan();
+    wirePull();
 
     var button = document.querySelector("[data-save-edition]");
     if (!button) return;
