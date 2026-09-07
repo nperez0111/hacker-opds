@@ -1002,77 +1002,64 @@ summary {
  * and it is not repealed here - it is scoped. A pinned layer forces a repaint
  * of the region under it on every scroll step, which on a panel with a
  * hundreds-of-milliseconds refresh is the most expensive thing the page can do.
- * On any other display it is free. So the button is not shown to devices that
- * cannot afford it, and the media query below is the whole of that judgement:
+ * On any other display it is free. The control is shown on the slow panels
+ * anyway, at the reader's request: the walk it offers is exactly what a long
+ * discussion wants on an e-ink reader, where the scrollbar is weakest, and the
+ * repaint cost is paid a step at a time, on content the reader has chosen to
+ * look at. The cost is accepted, not hidden.
  *
- *   update: fast - the panel can repaint quickly. This feature exists in the
- *                  spec precisely to name e-ink and other slow displays, which
- *                  report update: slow. It is the only standard signal for the
- *                  thing being asked about; everything else - screen width,
- *                  pixel ratio, monochrome - is a proxy that guesses.
- *
- * That is the only clause. An earlier draft also required pointer: coarse, on
- * the reasoning that a desktop has a scrollbar and room to spare - but the cost
- * this rule exists to avoid is a repaint, not a tap, and a mouse pays no more
- * for a pinned corner than a thumb does. A long discussion is long on a laptop
- * too, and the scrollbar is a worse instrument for it than a control that knows
- * where the thread boundaries are. Gating on the input device answered a
- * question nobody was asking.
- *
- * A browser that has never heard of update does not match, so it gets
- * nothing. That is the correct direction to fail: the older and stranger the
- * browser, the more likely it is the hardware this ban was written for, and
- * every reader who sees no button still has the Comments link in the story
- * header and the thread anchors in the URL.
- *
- * What this cannot detect is an e-ink device running a mainstream Android
- * browser, which reports update: fast because the browser does not know what
- * panel it is attached to. Nothing available to CSS distinguishes that case.
+ * The gate is the script, not the panel. [data-thread-jump-ready] is set only
+ * once something is able to act on a tap, so a browser that cannot run the
+ * page script sees no pinned layer no matter how fast its display is. No
+ * media query rations the rest, because none can name the device being asked
+ * about: an e-ink reader running a mainstream Android browser reports
+ * update: fast because the browser does not know what panel it is attached
+ * to, so a query on update would have shown it the control whether it could
+ * afford one or not - and withheld it from exactly the reader who asked for
+ * it. Everything else - screen width, pixel ratio, monochrome - is a proxy
+ * that guesses.
  *
  * With no stylesheet at all the button is a plain, statically positioned button
  * at the foot of the discussion - the base rule is the hiding one, so losing
- * the sheet loses the hiding, not the control. That degrades to something
- * harmless rather than to a pinned layer on the device that cannot take one.
+ * the sheet loses the hiding, not the control.
  */
 [data-thread-jump] {
   display: none;
 }
 
-@media (update: fast) {
+/*
+ * Gated on the root attribute the page script sets, so the button only
+ * appears once something is able to act on a tap. The markup also ships
+ * the hidden attribute; both halves are needed, because [hidden] is not
+ * reliably in the UA stylesheet on this hardware - the same belt-and-braces
+ * the saved marker uses.
+ */
+html[data-thread-jump-ready] [data-thread-jump] {
+  display: flex;
   /*
-   * Gated on the root attribute the page script sets, so the button only
-   * appears once something is able to act on a tap. The markup also ships
-   * the hidden attribute; both halves are needed, because [hidden] is not
-   * reliably in the UA stylesheet on this hardware - the same belt-and-braces
-   * the saved marker uses.
+   * Back on the left, on the right, in source order. Half a tap between them
+   * so a thumb aiming for one does not carry into the other - the two do
+   * opposite things, and this is the one place on the page where a mis-tap
+   * undoes the tap before it.
    */
-  html[data-thread-jump-ready] [data-thread-jump] {
-    display: flex;
-    /*
-     * Back on the left, on the right, in source order. Half a tap between them
-     * so a thumb aiming for one does not carry into the other - the two do
-     * opposite things, and this is the one place on the page where a mis-tap
-     * undoes the tap before it.
-     */
-    gap: 0.5rem;
-    position: fixed;
-    right: 0.9rem;
-    /*
-     * Clear of the browser's own bottom chrome, which on iOS Safari is an
-     * overlay that appears on scroll-up and would otherwise sit on top of this.
-     */
-    bottom: 1.5rem;
-    /*
-     * Above the pinned header stack, which tops out at 6. A thread boundary is
-     * exactly where a pinned ancestor is sliding out, so these do overlap.
-     */
-    z-index: 7;
-  }
+  gap: 0.5rem;
+  position: fixed;
+  right: 0.9rem;
+  /*
+   * Clear of the browser's own bottom chrome, which on iOS Safari is an
+   * overlay that appears on scroll-up and would otherwise sit on top of this.
+   */
+  bottom: 1.5rem;
+  /*
+   * Above the pinned header stack, which tops out at 6. A thread boundary is
+   * exactly where a pinned ancestor is sliding out, so these do overlap.
+   */
+  z-index: 7;
 }
 
 /*
- * The circles themselves, outside the query on purpose: they only ever paint
- * inside a box the rule above has to switch on first, so gating them again
+ * The circles themselves, outside the reveal rule on purpose: they only ever
+ * paint inside a box that rule has to switch on first, so gating them again
  * would state the same condition twice and let the two copies disagree.
  */
 .thread-jump-btn {
@@ -1085,8 +1072,8 @@ summary {
   border: 3px solid var(--bg);
   /*
    * The one curve in the stylesheet. Everything else is square because a
-   * dithered arc on a greyscale panel is a ragged edge - which is not a
-   * concern for anything that matches the query above.
+   * dithered arc on a greyscale panel is a ragged edge, and the panels this
+   * sheet is built for are greyscale.
    */
   border-radius: 50%;
   background: var(--accent-bg);
@@ -1192,9 +1179,9 @@ html[data-sw="ready"] p.offline-note[data-offline-ui] {
   .actions,
   .site-foot,
   .settings,
-  /* Belt and braces. Print media reports update: none, so the rule that shows
-   * this cannot match anyway - but a control that only exists to scroll has no
-   * business being reachable by a rule this file does not control. */
+  /* The reveal rule carries no media condition, so this is what keeps the
+   * control off paper: a control that only exists to scroll has no business
+   * being reachable by a rule this file does not control. */
   [data-thread-jump] {
     display: none;
   }

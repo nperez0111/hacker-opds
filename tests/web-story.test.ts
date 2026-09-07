@@ -815,8 +815,8 @@ describe("SITE_CSS - page layout", () => {
 });
 
 /**
- * The one pinned element in the stylesheet, and the guard that keeps it off the
- * hardware the ban was written for.
+ * The one pinned element in the stylesheet, gated on the page script that can
+ * serve it.
  *
  * These tests are the ban. The module doc at the top of the stylesheet says
  * there is no position: fixed; there is now exactly one, and the only thing
@@ -826,13 +826,13 @@ describe("SITE_CSS - the thread jump button", () => {
   /** Declarations only. The prose above these rules discusses them by name. */
   const RULES = SITE_CSS.replace(/\/\*[\s\S]*?\*\//g, "");
 
-  test("pins nothing outside the query that says the device can afford it", () => {
-    const gate = "@media (update: fast) {";
+  test("pins nothing outside the thread jump rule", () => {
+    const gate = "html[data-thread-jump-ready] [data-thread-jump] {";
     const start = RULES.indexOf(gate);
     expect(start).toBeGreaterThan(-1);
 
-    // Walk the braces to find where the media block actually ends, rather than
-    // trusting the next closing brace, which is the inner rule's.
+    // Walk the braces to find where the rule block actually ends, rather than
+    // trusting the next closing brace, which would be a declaration's.
     let depth = 0;
     let end = start;
     for (let i = start + gate.length - 1; i < RULES.length; i++) {
@@ -852,11 +852,13 @@ describe("SITE_CSS - the thread jump button", () => {
     }
   });
 
-  test("asks whether the panel is fast, not how wide it is", () => {
-    // update: fast is the only standard signal for "this display can repaint
-    // cheaply". Width, pixel ratio and monochrome are proxies that guess, and
-    // they guess wrong on exactly the devices that matter.
-    expect(RULES).toContain("@media (update: fast)");
+  test("shows on every display the script can serve, slow panels included", () => {
+    // The gate is the script, not the panel. An e-ink reader reports
+    // update: slow and is exactly where the control is wanted, so no media
+    // query rations it - and none could name the panel anyway: an e-ink
+    // device running a mainstream Android browser reports update: fast
+    // because the browser does not know what it is attached to.
+    expect(RULES).not.toContain("@media (update");
   });
 
   test("asks nothing about the input device", () => {
@@ -868,10 +870,12 @@ describe("SITE_CSS - the thread jump button", () => {
     expect(RULES).not.toContain("pointer:coarse");
   });
 
-  test("fails closed: a browser that has never heard of update gets nothing", () => {
-    // The base rule hides. A browser that cannot parse the query drops the
-    // block that shows, so the older and stranger the browser, the more surely
-    // it sees no pinned layer.
+  test("fails closed: a browser without the page script gets nothing", () => {
+    // The base rule hides. Nothing reveals the control but the root attribute
+    // the page script sets, so the older and stranger the browser, the more
+    // surely it sees no pinned layer - and every reader who sees no button
+    // still has the Comments link in the story header and the thread anchors
+    // in the URL.
     expect(RULES).toMatch(/\[data-thread-jump\] \{\s*display: none;\s*\}/);
   });
 
@@ -885,7 +889,7 @@ describe("SITE_CSS - the thread jump button", () => {
     expect(rule).toContain("height: var(--tap)");
     expect(rule).toContain("border-radius: 50%");
     // Everything else in the sheet is square; a dithered arc is a ragged edge
-    // on greyscale, which is not a concern for anything matching the query.
+    // on greyscale, and the panels this sheet is built for are greyscale.
     expect([...RULES.matchAll(/border-radius: (?!0)/g)]).toHaveLength(1);
   });
 
@@ -899,8 +903,8 @@ describe("SITE_CSS - the thread jump button", () => {
   });
 
   test("pins one layer for the pair, not one each", () => {
-    // The repaint this control is rationed for is a cost per fixed layer, not
-    // per button, so the buttons share a box rather than each having their own.
+    // The repaint is a cost per fixed layer, not per button, so the buttons
+    // share a box rather than each having their own.
     const rule = /\.thread-jump-btn \{[^}]*\}/.exec(RULES)?.[0] ?? "";
     expect(rule).not.toContain("position:");
     expect(rule).not.toContain("z-index");
