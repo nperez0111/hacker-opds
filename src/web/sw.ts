@@ -466,25 +466,29 @@ function cacheFirst(request) {
       return hit;
     }
     if (hit) {
+      var expired = isExpired(hit, Date.now());
       /*
        * Past its thirty days, or the reader explicitly asked for new bytes.
-       * Deleted here rather than left for the next sweep, because this is the
-       * moment the space is known to be reclaimable and the sweep may be a
-       * day away.
+       * An expired entry is deleted here rather than left for the next sweep,
+       * because this is the moment the space is known to be reclaimable and
+       * the sweep may be a day away. A reload keeps its still-valid fallback.
        *
        * The stale copy is still returned if the network then fails. Losing the
        * radio in the same second a page aged out should not cost the reader
-       * the page - the entry is gone from storage either way, which is the
-       * part the quota cares about.
+       * the page. An expired entry is gone from storage either way, which is
+       * the part the quota cares about.
        */
-      caches
-        .open(CACHE)
-        .then(function (cache) {
-          return cache.delete(request);
-        })
-        .catch(function () {});
+      if (expired) {
+        caches
+          .open(CACHE)
+          .then(function (cache) {
+            return cache.delete(request);
+          })
+          .catch(function () {});
+      }
       return fetch(request)
         .then(function (res) {
+          if (reload && res.status !== 200) return hit;
           return put(request, res);
         })
         .catch(function () {
@@ -1159,12 +1163,17 @@ export const APP_JS = `/* hacker-opds */
 
     function settle() {
       pulling = false;
+      startY = 0;
       pulled = 0;
       if (bar) bar.setAttribute("style", BAR_STYLE);
     }
 
     function purge() {
       busy = true;
+      if (navigator.onLine === false) {
+        window.location.reload();
+        return;
+      }
       var reloaded = false;
       function go() {
         if (reloaded) return;
@@ -1191,7 +1200,10 @@ export const APP_JS = `/* hacker-opds */
       if (busy || event.touches.length !== 1) return;
       var top =
         window.pageYOffset || document.documentElement.scrollTop || 0;
-      if (top > 0) return;
+      if (top > 0) {
+        settle();
+        return;
+      }
       startY = event.touches[0].clientY;
       pulling = true;
     });
@@ -1219,6 +1231,8 @@ export const APP_JS = `/* hacker-opds */
       settle();
       if (amount >= THRESHOLD && !busy) purge();
     });
+
+    document.addEventListener("touchcancel", settle);
   }
 
   function wire() {

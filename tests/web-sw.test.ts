@@ -657,6 +657,20 @@ describe("serviceWorkerJs - freshness, executed", () => {
     expect(worker.fetched).toEqual(["/story/1"]);
     expect(worker.at("/story/1")).toBe(NOW);
   });
+
+  test("a failed reload keeps and returns the cached response", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - days(1), fresh: 86400, body: "cached" }],
+      network: () => new Response("unavailable", { status: 503 }),
+    });
+    const cached = worker.entry("/story/1");
+    const response = await worker.navigate("/story/1", { cache: "reload" });
+
+    expect(response).toBe(cached);
+    expect(worker.entry("/story/1")).toBe(cached);
+    expect(await response?.text()).toBe("cached");
+  });
 });
 
 describe("serviceWorkerJs - age eviction, executed", () => {
@@ -2050,6 +2064,7 @@ describe("APP_JS - pull to refresh, executed", () => {
   interface PullOptions {
     /** False models a desktop browser, which has no touch screen at all. */
     touch?: boolean;
+    online?: boolean;
   }
 
   interface TouchEventLike {
@@ -2098,6 +2113,7 @@ describe("APP_JS - pull to refresh, executed", () => {
     const removed: Array<unknown> = [];
     const messageListeners: Array<(event: { data?: unknown }) => void> = [];
     const navigator = {
+      onLine: opts.online ?? true,
       serviceWorker: {
         register: () => Promise.resolve({}),
         ready: Promise.resolve({
@@ -2156,6 +2172,9 @@ describe("APP_JS - pull to refresh, executed", () => {
       /* The indicator is the only node the gesture ever adds to the page. */
       barStyle: () => (appended[0] ? appended[0].getAttribute("style") : null),
       flush,
+      setTop: (top: number) => {
+        windowLike.pageYOffset = top;
+      },
       start: (at: number) => fire("touchstart", { touches: [{ clientY: at }], preventDefault: () => {} }),
       move: (at: number, cancelable = true) => {
         const prevented: number[] = [];
@@ -2169,6 +2188,7 @@ describe("APP_JS - pull to refresh, executed", () => {
         return prevented;
       },
       end: () => fire("touchend", { touches: [], preventDefault: () => {} }),
+      cancel: () => fire("touchcancel", { touches: [], preventDefault: () => {} }),
       reply: (message: { type: string; dropped: number }) => {
         for (const fn of messageListeners) fn({ data: message });
       },
@@ -2236,6 +2256,48 @@ describe("APP_JS - pull to refresh, executed", () => {
     expect(prevented).toEqual([]);
     expect(p.posted).toEqual([]);
     expect(p.barStyle()).toContain("height:0;");
+  });
+
+  test("cancels an interrupted pull and allows a fresh gesture", async () => {
+    const p = pullPage();
+    p.start(0);
+    p.move(350);
+    p.cancel();
+    expect(p.barStyle()).toContain("height:0;");
+
+    p.end();
+    await p.flush();
+    expect(p.posted).toEqual([]);
+
+    p.start(100);
+    p.move(350);
+    p.end();
+    await p.flush();
+    expect(p.posted).toEqual([{ type: "purge-cache" }]);
+  });
+
+  test("abandons a pull when a new touch starts away from the top", async () => {
+    const p = pullPage();
+    p.start(0);
+    p.move(350);
+    p.setTop(10);
+    p.start(350);
+    p.end();
+    await p.flush();
+
+    expect(p.barStyle()).toContain("height:0;");
+    expect(p.posted).toEqual([]);
+  });
+
+  test("reloads without purging while offline", async () => {
+    const p = pullPage({ online: false });
+    p.start(0);
+    p.move(350);
+    p.end();
+    await p.flush();
+
+    expect(p.posted).toEqual([]);
+    expect(p.reloads).toEqual([1]);
   });
 
   test("ignores a second pull while a purge is in flight", async () => {

@@ -944,6 +944,6 @@ describe("SITE_CSS - the thread jump button", () => {
 
   test("is not printed", () => {
     const print = /@media print \{[\s\S]*?\n\}/.exec(RULES)?.[0] ?? "";
-    expect(print).toContain("[data-thread-jump]");
+    expect(print).toContain("html[data-thread-jump-ready] [data-thread-jump]");
   });
 });

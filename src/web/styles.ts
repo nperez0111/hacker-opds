@@ -1182,7 +1182,7 @@ html[data-sw="ready"] p.offline-note[data-offline-ui] {
   /* The reveal rule carries no media condition, so this is what keeps the
    * control off paper: a control that only exists to scroll has no business
    * being reachable by a rule this file does not control. */
-  [data-thread-jump] {
+  html[data-thread-jump-ready] [data-thread-jump] {
     display: none;
   }
 }
