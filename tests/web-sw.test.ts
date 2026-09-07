@@ -27,6 +27,7 @@ import {
   CACHE_MAX_AGE_MS,
   CACHE_MAX_BYTES,
   CACHE_SWEEP_INTERVAL_MS,
+  FRESH_FOR_HEADER,
   SWEEP_MARK_URL,
 } from "~/web/offline";
 import { commentsHtml } from "~/web/story";
@@ -327,6 +328,8 @@ interface SeedEntry {
   at?: number;
   /** Written as the stamped byte count. Defaults to the body's length. */
   bytes?: number;
+  /** Written as the origin's freshness promise. Omit for an entry with no window. */
+  fresh?: number;
   body?: string;
   /** Written as an origin `Date` header, for the fallback path. */
   date?: string;
@@ -399,11 +402,21 @@ interface SaveMessage {
   url: string | null;
 }
 
+/** The worker's reply to the page's purge-cache message. */
+interface PurgeMessage {
+  type: string;
+  dropped: number;
+}
+
 interface WorkerOptions {
   now?: number;
   seed?: SeedEntry[];
-  /** Body for a path, or null to make the request fail. */
-  network?: (path: string) => string | null;
+  /**
+   * Body for a path, or null to make the request fail. A string becomes a
+   * plain 200; a Response is handed over as-is, so a test can give the origin
+   * its own cache-control header.
+   */
+  network?: (path: string) => string | Response | null;
   /** Reuse storage across worker instances, which is what a real update does. */
   storage?: FakeCacheStorage;
 }
@@ -419,8 +432,10 @@ interface Worker {
   at: (url: string) => number;
   setNow: (value: number) => void;
   activate: () => Promise<void>;
-  navigate: (path: string) => Promise<Response | undefined>;
+  /** extra is merged into the fake request, e.g. to set request.cache. */
+  navigate: (path: string, extra?: Record<string, unknown>) => Promise<Response | undefined>;
   save: (urls: string[]) => Promise<SaveMessage[]>;
+  purge: () => Promise<PurgeMessage[]>;
   /** Lets the worker's fire-and-forget writes land. */
   settle: () => Promise<void>;
 }
@@ -434,6 +449,7 @@ function seedResponse(entry: SeedEntry): Response {
   // Independent of the stamp, so an undated entry can still be given a size -
   // which is the case the size rule has to handle and the age rule cannot.
   headers.set(CACHED_BYTES_HEADER, String(entry.bytes ?? body.length));
+  if (entry.fresh !== undefined) headers.set(FRESH_FOR_HEADER, String(entry.fresh));
   if (entry.date) headers.set("date", entry.date);
   return new Response(body, { status: 200, headers });
 }
@@ -465,6 +481,7 @@ function boot(options: WorkerOptions = {}): Worker {
     fetched.push(new URL(url).pathname);
     const body = network(new URL(url).pathname);
     if (body === null) return Promise.reject(new Error("offline"));
+    if (typeof body !== "string") return Promise.resolve(body);
     return Promise.resolve(
       new Response(body, { status: 200, headers: { "content-type": "text/html" } }),
     );
@@ -496,7 +513,7 @@ function boot(options: WorkerOptions = {}): Worker {
       await Promise.all(pending);
       await settle();
     },
-    navigate: async (path) => {
+    navigate: async (path, extra) => {
       const pending: Array<Promise<unknown>> = [];
       let answered: Promise<Response> | undefined;
       listeners.fetch?.({
@@ -504,6 +521,7 @@ function boot(options: WorkerOptions = {}): Worker {
           method: "GET",
           url: `${ORIGIN}${path}`,
           mode: "navigate",
+          ...extra,
           headers: { get: (name: string) => (name === "accept" ? "text/html" : null) },
         },
         waitUntil: (p: Promise<unknown>) => pending.push(p),
@@ -522,6 +540,18 @@ function boot(options: WorkerOptions = {}): Worker {
       listeners.message?.({
         data: { type: "save-urls", urls },
         source: { postMessage: (message: SaveMessage) => posted.push(message) },
+        waitUntil: (p: Promise<unknown>) => pending.push(p),
+      });
+      await Promise.all(pending);
+      await settle();
+      return posted;
+    },
+    purge: async () => {
+      const posted: PurgeMessage[] = [];
+      const pending: Array<Promise<unknown>> = [];
+      listeners.message?.({
+        data: { type: "purge-cache" },
+        source: { postMessage: (message: PurgeMessage) => posted.push(message) },
         waitUntil: (p: Promise<unknown>) => pending.push(p),
       });
       await Promise.all(pending);
@@ -557,6 +587,75 @@ describe("serviceWorkerJs - stamping, executed", () => {
     await worker.navigate("/story/1");
 
     expect(worker.at("/story/1")).toBe(NOW + days(1));
+  });
+});
+
+describe("serviceWorkerJs - freshness, executed", () => {
+  test("records how long the origin promises to keep a response", async () => {
+    const worker = boot({
+      now: NOW,
+      network: (path) =>
+        path === "/story/1"
+          ? new Response("a page", {
+              headers: { "content-type": "text/html", "cache-control": "public, max-age=86400" },
+            })
+          : "network body",
+    });
+    await worker.navigate("/story/1");
+
+    expect(worker.entry("/story/1")?.headers.get(FRESH_FOR_HEADER)).toBe("86400");
+  });
+
+  test("stores a zero window when the origin makes no promise", async () => {
+    const worker = boot({ now: NOW });
+    await worker.navigate("/story/1");
+
+    expect(worker.entry("/story/1")?.headers.get(FRESH_FOR_HEADER)).toBe("0");
+  });
+
+  test("serves an entry within its window without touching the network", async () => {
+    // The quiet-page fix: a story opened twice in a day no longer pays for a
+    // full network round trip on the second visit.
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - days(1), fresh: 86400 }],
+    });
+    await worker.navigate("/story/1");
+
+    expect(worker.fetched).toEqual([]);
+    expect(worker.at("/story/1")).toBe(NOW - days(1));
+  });
+
+  test("revalidates behind the scenes once an entry is past its window", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - days(2), fresh: 86400 }],
+    });
+    await worker.navigate("/story/1");
+
+    expect(worker.fetched).toEqual(["/story/1"]);
+  });
+
+  test("still revalidates an entry that carries no window", async () => {
+    // Entries from before the window existed must not read as fresh forever.
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - days(1) }],
+    });
+    await worker.navigate("/story/1");
+
+    expect(worker.fetched).toEqual(["/story/1"]);
+  });
+
+  test("a reload asks for fresh bytes even inside the window", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW - days(1), fresh: 86400 }],
+    });
+    await worker.navigate("/story/1", { cache: "reload" });
+
+    expect(worker.fetched).toEqual(["/story/1"]);
+    expect(worker.at("/story/1")).toBe(NOW);
   });
 });
 
@@ -848,6 +947,48 @@ describe("serviceWorkerJs - serving an expired entry", () => {
     expect(await response?.text()).toBe("cached");
     // ...and refreshed behind the reader's back, which is what it did before.
     expect(worker.fetched).toEqual(["/story/1"]);
+  });
+});
+
+describe("serviceWorkerJs - cache purge, executed", () => {
+  test("drops every saved page but keeps the shell and its bookkeeping", async () => {
+    // This backs the pull-to-refresh gesture: after the drop, nothing served
+    // from this cache can be stale, while the precache that keeps the shell
+    // working offline and the content-hashed assets survive untouched.
+    const worker = boot({
+      now: NOW,
+      seed: [
+        { url: "/story/1", at: NOW },
+        { url: "/search?q=x", at: NOW },
+        { url: "/assets/site.css?v=abcd1234", at: NOW },
+        { url: "/", at: NOW },
+        { url: "/offline", at: NOW },
+        { url: "/__hopds/swept", at: NOW },
+      ],
+    });
+
+    const posted = await worker.purge();
+
+    expect(worker.paths()).toEqual([
+      "/",
+      "/__hopds/swept",
+      "/assets/site.css?v=abcd1234",
+      "/offline",
+    ]);
+    expect(posted).toEqual([{ type: "cache-purged", dropped: 2 }]);
+  });
+
+  test("sends a purged page back to the network on the next visit", async () => {
+    const worker = boot({
+      now: NOW,
+      seed: [{ url: "/story/1", at: NOW }],
+    });
+
+    await worker.purge();
+    const response = await worker.navigate("/story/1");
+
+    expect(worker.fetched).toEqual(["/story/1"]);
+    expect(await response?.text()).toBe("network body");
   });
 });
 
@@ -1528,8 +1669,10 @@ describe("APP_JS - scroll correction, as written", () => {
   });
 
   test("cannot break collapsing, because it never collapses anything", () => {
-    // The zero-JS behaviour is the product; this listener only reads.
-    expect(APP_CODE).not.toContain("preventDefault");
+    // The zero-JS behaviour is the product; this listener only reads. Scoped to
+    // the scroll half: the pull gesture is allowed its preventDefault, but only
+    // on touchmove, and only while the indicator is being dragged.
+    expect(SCROLL_CODE).not.toContain("preventDefault");
     expect(APP_CODE).not.toMatch(/\.open\s*=[^=]/);
     expect(APP_CODE).not.toContain('setAttribute("open"');
     expect(APP_CODE).not.toContain('removeAttribute("open"');
@@ -1900,6 +2043,215 @@ describe("APP_JS - the thread jump control", () => {
     p.click(p.find("#c2 > summary.chead"));
 
     expect(p.topOf("c2")).toBe(CHEAD_H);
+  });
+});
+
+describe("APP_JS - pull to refresh, executed", () => {
+  interface PullOptions {
+    /** False models a desktop browser, which has no touch screen at all. */
+    touch?: boolean;
+  }
+
+  interface TouchEventLike {
+    touches: Array<{ clientY: number }>;
+    cancelable?: boolean;
+    preventDefault: () => void;
+  }
+
+  interface BarLike {
+    getAttribute: (name: string) => string | null;
+  }
+
+  /*
+   * The gesture sits behind two gates - worker support and a touch screen -
+   * and talks to the worker through the same postMessage channel the save
+   * button uses. The harness gives it exactly those surfaces plus a reload it
+   * can be seen calling, and hands the test the registered touch handlers to
+   * fire directly: linkedom has no touch events to dispatch.
+   */
+  function pullPage(opts: PullOptions = {}) {
+    const { document } = parseHTML(
+      `<!doctype html><html><body><main>today's stories</main></body></html>`,
+    );
+
+    const doc = document as unknown as {
+      addEventListener: (
+        type: string,
+        fn: (event: TouchEventLike) => void,
+        capture?: unknown,
+      ) => void;
+      documentElement: { scrollTop: number };
+      body: { appendChild: (node: unknown) => void };
+    };
+    const handlers: Record<string, Array<(event: TouchEventLike) => void>> = {};
+    doc.addEventListener = (type, fn) => {
+      (handlers[type] ??= []).push(fn);
+    };
+    doc.documentElement.scrollTop = 0;
+
+    const appended: Array<BarLike> = [];
+    doc.body.appendChild = (node) => {
+      appended.push(node as BarLike);
+    };
+
+    const posted: Array<{ type: string }> = [];
+    const removed: Array<unknown> = [];
+    const messageListeners: Array<(event: { data?: unknown }) => void> = [];
+    const navigator = {
+      serviceWorker: {
+        register: () => Promise.resolve({}),
+        ready: Promise.resolve({
+          active: {
+            postMessage: (message: { type: string }) => posted.push(message),
+          },
+        }),
+        addEventListener: (type: string, fn: (event: { data?: unknown }) => void) => {
+          if (type === "message") messageListeners.push(fn);
+        },
+        removeEventListener: (_type: string, fn: unknown) => {
+          removed.push(fn);
+        },
+      },
+    };
+
+    const timers: Array<() => void> = [];
+    const reloads: number[] = [];
+    const windowLike: Record<string, unknown> = {
+      pageYOffset: 0,
+      location: {
+        reload: () => {
+          reloads.push(1);
+        },
+      },
+    };
+    if (opts.touch !== false) windowLike.ontouchstart = null;
+
+    new Function("window", "document", "navigator", "caches", "Date", "setTimeout", APP_JS)(
+      windowLike,
+      doc,
+      navigator,
+      undefined,
+      { now: () => NOW },
+      (fn: () => void) => {
+        timers.push(fn);
+        return timers.length;
+      },
+    );
+
+    /* The purge reaches the worker through ready.then, so give it a turn. */
+    async function flush(): Promise<void> {
+      for (let i = 0; i < 16; i += 1) await Promise.resolve();
+    }
+
+    function fire(type: string, event: TouchEventLike): void {
+      for (const fn of handlers[type] ?? []) fn(event);
+    }
+
+    return {
+      handlers,
+      posted,
+      removed,
+      reloads,
+      timers,
+      /* The indicator is the only node the gesture ever adds to the page. */
+      barStyle: () => (appended[0] ? appended[0].getAttribute("style") : null),
+      flush,
+      start: (at: number) => fire("touchstart", { touches: [{ clientY: at }], preventDefault: () => {} }),
+      move: (at: number, cancelable = true) => {
+        const prevented: number[] = [];
+        fire("touchmove", {
+          touches: [{ clientY: at }],
+          cancelable,
+          preventDefault: () => {
+            prevented.push(1);
+          },
+        });
+        return prevented;
+      },
+      end: () => fire("touchend", { touches: [], preventDefault: () => {} }),
+      reply: (message: { type: string; dropped: number }) => {
+        for (const fn of messageListeners) fn({ data: message });
+      },
+    };
+  }
+
+  test("binds nothing on a browser without a touch screen", () => {
+    // The collapse delegation from the first IIFE still runs; the gesture
+    // half must add none of its three touch handlers on top of it.
+    const p = pullPage({ touch: false });
+
+    expect(Object.keys(p.handlers)).toEqual(["click"]);
+  });
+
+  test("purges the cache after a full pull, and shows it working", async () => {
+    // 250 raw pixels come through the half-strength resistance as 125, past
+    // the 96 threshold and past the indicator's 64px cap.
+    const p = pullPage();
+    p.start(100);
+    const prevented = p.move(350);
+    expect(p.barStyle()).toContain("height:64px;");
+    p.end();
+    await p.flush();
+
+    expect(prevented).toEqual([1]);
+    expect(p.posted).toEqual([{ type: "purge-cache" }]);
+    expect(p.timers).toHaveLength(2);
+  });
+
+  test("reloads as soon as the worker confirms the purge", async () => {
+    const p = pullPage();
+    p.start(0);
+    p.move(350);
+    p.end();
+    await p.flush();
+
+    p.reply({ type: "cache-purged", dropped: 2 });
+    expect(p.reloads).toEqual([1]);
+    expect(p.removed).toHaveLength(1);
+
+    /* The reply already ended it; neither timer may reload a second time. */
+    for (const timer of p.timers) timer();
+    expect(p.reloads).toEqual([1]);
+  });
+
+  test("reloads anyway when the worker never answers", async () => {
+    const p = pullPage();
+    p.start(0);
+    p.move(350);
+    p.end();
+    await p.flush();
+
+    p.timers[0]();
+    expect(p.reloads).toEqual([1]);
+  });
+
+  test("leaves a short pull alone", () => {
+    // 40 raw pixels resist down to 20, well short of the threshold, and a
+    // scroll the browser can still own must not be cancelled.
+    const p = pullPage();
+    p.start(0);
+    const prevented = p.move(40, false);
+    p.end();
+
+    expect(prevented).toEqual([]);
+    expect(p.posted).toEqual([]);
+    expect(p.barStyle()).toContain("height:0;");
+  });
+
+  test("ignores a second pull while a purge is in flight", async () => {
+    const p = pullPage();
+    p.start(0);
+    p.move(350);
+    p.end();
+    await p.flush();
+
+    p.start(0);
+    p.move(350);
+    p.end();
+    await p.flush();
+
+    expect(p.posted).toEqual([{ type: "purge-cache" }]);
+    expect(p.timers).toHaveLength(2);
   });
 });
 

@@ -98,6 +98,22 @@ export const CACHED_AT_HEADER = "x-hopds-cached";
 export const CACHED_BYTES_HEADER = "x-hopds-bytes";
 
 /**
+ * How long the origin says a stored entry is good for, in seconds.
+ *
+ * The worker records this when it stores a response, parsed from that
+ * response's own `cache-control`, so a later cache hit can tell "the server
+ * guarantees this page is unchanged" from "the page has no such guarantee". A
+ * cache-first page used to revalidate in the background on *every* hit, and
+ * on an e-reader - where the radio is the slow part - that made every
+ * already-cached page cost a round trip anyway, which is the opposite of what
+ * the cache is for. Honouring the origin's freshness window drops the round
+ * trip for pages the server vouches for, and once the window lapses the old
+ * revalidate-on-hit behaviour resumes, so staleness is no weaker than before.
+ * Zero means no opinion: revalidate, as before.
+ */
+export const FRESH_FOR_HEADER = "x-hopds-fresh-for";
+
+/**
  * Cache key holding the last sweep's timestamp.
  *
  * Under `/__hopds/` rather than a plausible-looking path so it can never
