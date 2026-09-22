@@ -17,7 +17,7 @@ import { HTTPError, mockEvent, type H3Event } from "nitro/h3";
 
 import { resetConfig, setConfigForTests } from "~/config";
 import { getDb, resetDbForTests } from "~/db/client";
-import type { StoryRow } from "~/core/edition";
+import { shiftDate, today, type StoryRow } from "~/core/edition";
 import {
   APP_JS_URL,
   CSS_URL,
@@ -387,53 +387,61 @@ describe("GET /offline", () => {
 });
 
 describe("GET /", () => {
-  test("404s with an explanation before any edition exists", async () => {
+  test("404s with an explanation when yesterday is not available", async () => {
     const res = await call(indexRoute, event("/"));
     expect(res.status).toBe(404);
     const html = await res.text();
-    expect(html).toContain("No edition has been built yet.");
+    expect(html).toContain("The edition for yesterday");
     // Still a whole page, not a bare error string.
     expect(html).toContain("<!DOCTYPE html>");
   });
 
-  test("renders the latest edition", async () => {
-    seedEdition("2026-08-15");
-    seedEdition("2026-08-16");
-    seedStory({ id: 1, edition_date: "2026-08-16", title: "Newest story" });
-    seedStory({ id: 2, edition_date: "2026-08-15", title: "Older story" });
+  test("renders yesterday rather than whichever edition is newest", async () => {
+    const date = shiftDate(today(), -1);
+    const older = shiftDate(date, -1);
+    const newer = shiftDate(date, 1);
+    seedEdition(older);
+    seedEdition(date);
+    seedEdition(newer);
+    seedStory({ id: 1, edition_date: date, title: "Yesterday story" });
+    seedStory({ id: 2, edition_date: older, title: "Older story" });
+    seedStory({ id: 3, edition_date: newer, title: "Newer story" });
 
     const html = await (await call(indexRoute, event("/"))).text();
-    expect(html).toContain("Newest story");
+    expect(html).toContain("Yesterday story");
     expect(html).not.toContain("Older story");
+    expect(html).not.toContain("Newer story");
   });
 
   test("orders stories by rank", async () => {
-    seedEdition("2026-08-16");
-    seedStory({ id: 1, rank: 2, title: "Second" });
-    seedStory({ id: 2, rank: 1, title: "First" });
+    const date = shiftDate(today(), -1);
+    seedEdition(date);
+    seedStory({ id: 1, edition_date: date, rank: 2, title: "Second" });
+    seedStory({ id: 2, edition_date: date, rank: 1, title: "First" });
 
     const html = await (await call(indexRoute, event("/"))).text();
     expect(html.indexOf("First")).toBeLessThan(html.indexOf("Second"));
   });
 
-  test("is never cached, since which edition is newest changes daily", async () => {
-    seedEdition("2026-08-16");
+  test("is never cached, since the date called yesterday changes daily", async () => {
+    seedEdition(shiftDate(today(), -1));
     const res = await call(indexRoute, event("/"));
     expect(res.headers.get("cache-control")).toBe("no-cache");
   });
 
   test("marks Today as the current section", async () => {
-    seedEdition("2026-08-16");
+    seedEdition(shiftDate(today(), -1));
     const html = await (await call(indexRoute, event("/"))).text();
     expect(html).toContain('<a href="/" aria-current="page">Today</a>');
   });
 
   test("offers the whole edition for offline saving", async () => {
-    seedEdition("2026-08-16");
-    seedStory({ id: 7 });
+    const date = shiftDate(today(), -1);
+    seedEdition(date);
+    seedStory({ id: 7, edition_date: date });
     const html = await (await call(indexRoute, event("/"))).text();
     expect(html).toContain("data-save-edition");
-    expect(html).toContain("/archive/2026-08-16");
+    expect(html).toContain(`/archive/${date}`);
     expect(html).toContain("/story/7");
   });
 });
