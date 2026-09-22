@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DateTime } from "luxon";
-import { bookAuthor, dayWindow, hostOf, shiftDate } from "~/core/edition";
+import { bookAuthor, dayWindow, hostOf, shiftDate, yesterday } from "~/core/edition";
 
 const TZ = "Europe/Amsterdam";
 
@@ -65,6 +65,13 @@ describe("shiftDate", () => {
 
   test("handles a leap day", () => {
     expect(shiftDate("2028-03-01", -1, TZ)).toBe("2028-02-29");
+  });
+});
+
+describe("yesterday", () => {
+  test("uses the requested timezone rather than the host timezone", () => {
+    // These zones are exactly one calendar day apart at every instant.
+    expect(yesterday("Pacific/Kiritimati")).not.toBe(yesterday("Pacific/Honolulu"));
   });
 });
 

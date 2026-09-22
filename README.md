@@ -101,6 +101,7 @@ docker run -d \
   --name hacker-opds \
   -p 8080:3000 \
   -v hacker-opds-data:/data \
+  -e TZ=Europe/Amsterdam \
   -e EDITION_TZ=Europe/Amsterdam \
   ghcr.io/nperez0111/hacker-opds:main
 ```
@@ -109,6 +110,14 @@ Or with the provided compose file:
 
 ```bash
 docker compose up -d
+```
+
+Compose uses the deployment's `TZ` value for both the container clock and
+`EDITION_TZ`, defaulting to `Europe/Amsterdam`. Set it in the shell, in
+Portainer's stack environment, or in a `.env` file before deploying:
+
+```bash
+TZ=America/New_York docker compose up -d
 ```
 
 The image is ~117 MB, of which 83 MB is the Bun binary. It runs as a non-root
@@ -156,7 +165,7 @@ bun run start
 
 | Path | |
 |---|---|
-| `/` | The most recent edition |
+| `/` | Yesterday's edition in `EDITION_TZ` |
 | `/archive` | Every edition still in retention |
 | `/archive/{date}` | One edition |
 | `/story/{id}` | Article and full comment tree |

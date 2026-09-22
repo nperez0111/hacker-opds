@@ -44,6 +44,11 @@ export function shiftDate(date: string, days: number, tz = config().editionTz) {
     .toFormat("yyyy-MM-dd");
 }
 
+/** The previous calendar date in the edition timezone. */
+export function yesterday(tz = config().editionTz): string {
+  return shiftDate(today(tz), -1, tz);
+}
+
 /**
  * Editions whose window has closed (day end + lag) but which have not been
  * ingested yet, oldest first. Self-determining so the hourly task is
@@ -327,6 +332,16 @@ export function latestEdition(): string | null {
     )
     .get();
   return row?.date ?? null;
+}
+
+export function editionExists(date: string): boolean {
+  return Boolean(
+    getDb()
+      .query<{ present: number }, [string]>(
+        "SELECT 1 AS present FROM editions WHERE date = ? AND state != 'pending'",
+      )
+      .get(date),
+  );
 }
 
 /** One row of the archive index. `built_at` is null until the edition closes. */

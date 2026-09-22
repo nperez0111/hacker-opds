@@ -1,5 +1,5 @@
 import { defineHandler } from "nitro/h3";
-import { getEditionStories, latestEdition, today } from "~/core/edition";
+import { editionExists, getEditionStories, today, yesterday } from "~/core/edition";
 import { Shell, pageAttrs } from "~/web/layout";
 import { readPreferences } from "~/web/settings";
 import { longDate } from "~/web/format";
@@ -7,24 +7,24 @@ import { estimateEditionSave } from "~/web/size";
 import { EditionView, NotFoundView } from "~/web/views";
 
 /**
- * `GET /` - the most recent edition we hold.
+ * `GET /` - yesterday's edition in the configured deployment timezone.
  *
- * Deliberately the latest *built* edition rather than the current calendar
- * day: an edition only closes after `EDITION_LAG_HOURS`, so on a fresh morning
- * "today" does not exist yet and this would otherwise be an empty page.
+ * Deliberately names the date instead of falling back to the latest row. If
+ * ingestion is late, showing a two-day-old edition as though it were yesterday
+ * is worse than reporting that yesterday is not ready yet.
  *
- * Never cached at the edge. Which edition is newest changes daily, and the
+ * Never cached at the edge. The date called yesterday changes daily, and the
  * service worker treats this URL as network-first for the same reason.
  */
 export default defineHandler((event) => {
   const prefs = readPreferences(event);
-  const date = latestEdition();
+  const date = yesterday();
 
-  if (!date) {
+  if (!editionExists(date)) {
     return (
       <html {...pageAttrs({ prefs, status: 404, cacheControl: "no-cache" })}>
-        <Shell title="No editions yet" prefs={prefs} path="/">
-          <NotFoundView message="No edition has been built yet. Check back shortly." />
+        <Shell title="Yesterday is not ready" prefs={prefs} path="/">
+          <NotFoundView message={`The edition for yesterday (${date}) is not available yet. Check back shortly.`} />
         </Shell>
       </html>
     );

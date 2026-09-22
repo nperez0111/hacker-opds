@@ -30,13 +30,12 @@ services:
       - hacker-opds-data:/data
 
     environment:
-      # Editions are cut per calendar day in this zone, and nitro's scheduled
-      # tasks evaluate their cron expressions against process local time, so
-      # this single value controls both when a day closes and when the nightly
-      # retention sweep runs. Changing it after the fact will not re-cut
-      # existing editions.
-      TZ: Europe/Amsterdam
-      EDITION_TZ: Europe/Amsterdam
+      # Set TZ in the shell, Portainer stack environment, or a Compose .env
+      # file. Binding the same value into both variables keeps calendar-day
+      # editions and Nitro's process-local cron schedule on the same clock.
+      # Changing it after the fact will not re-cut existing editions.
+      TZ: ${TZ:-Europe/Amsterdam}
+      EDITION_TZ: ${TZ:-Europe/Amsterdam}
 
       PORT: "3000"
       DATA_DIR: /data
