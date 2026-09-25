@@ -18,6 +18,7 @@ import { HTTPError, mockEvent, type H3Event } from "nitro/h3";
 import { resetConfig, setConfigForTests } from "~/config";
 import { getDb, resetDbForTests } from "~/db/client";
 import { shiftDate, today, type StoryRow } from "~/core/edition";
+import { longDate } from "~/web/format";
 import {
   APP_JS_URL,
   CSS_URL,
@@ -387,15 +388,35 @@ describe("GET /offline", () => {
 });
 
 describe("GET /", () => {
-  test("404s with an explanation when yesterday is not available", async () => {
+  test("serves an empty state with 200 before the first edition", async () => {
     const res = await call(indexRoute, event("/"));
-    expect(res.status).toBe(404);
-    const html = await res.text();
-    expect(html).toContain("The edition for yesterday");
-    // Still a whole page, not a bare error string.
-    expect(html).toContain("<!DOCTYPE html>");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("No editions yet");
   });
 
+  test("falls back to the latest available date while yesterday is being prepared", async () => {
+    const date = shiftDate(today(), -2);
+    seedEdition(date);
+    seedStory({ edition_date: date, title: "Available story" });
+    const res = await call(indexRoute, event("/"));
+    const html = await res.text();
+    expect(res.status).toBe(200);
+    expect(html).toContain("Available story");
+    expect(html).toContain("Latest available edition:");
+    expect(html).toContain(longDate(date));
+  });
+
+  test("switches to yesterday after recovery", async () => {
+    const older = shiftDate(today(), -2);
+    const date = shiftDate(today(), -1);
+    seedEdition(older);
+    seedStory({ edition_date: older, title: "Older story" });
+    seedEdition(date);
+    seedStory({ id: 999_999_002, edition_date: date, title: "Recovered story" });
+    const html = await (await call(indexRoute, event("/"))).text();
+    expect(html).toContain("Recovered story");
+    expect(html).not.toContain("Older story");
+  });
   test("renders yesterday rather than whichever edition is newest", async () => {
     const date = shiftDate(today(), -1);
     const older = shiftDate(date, -1);

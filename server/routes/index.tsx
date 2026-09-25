@@ -1,30 +1,28 @@
 import { defineHandler } from "nitro/h3";
-import { editionExists, getEditionStories, today, yesterday } from "~/core/edition";
+import { editionExists, getEditionStories, latestEdition, today, yesterday } from "~/core/edition";
 import { Shell, pageAttrs } from "~/web/layout";
 import { readPreferences } from "~/web/settings";
 import { longDate } from "~/web/format";
 import { estimateEditionSave } from "~/web/size";
-import { EditionView, NotFoundView } from "~/web/views";
+import { EditionView } from "~/web/views";
 
 /**
- * `GET /` - yesterday's edition in the configured deployment timezone.
- *
- * Deliberately names the date instead of falling back to the latest row. If
- * ingestion is late, showing a two-day-old edition as though it were yesterday
- * is worse than reporting that yesterday is not ready yet.
+ * `GET /` - the latest available edition, with its actual date in the heading.
  *
  * Never cached at the edge. The date called yesterday changes daily, and the
  * service worker treats this URL as network-first for the same reason.
  */
 export default defineHandler((event) => {
   const prefs = readPreferences(event);
-  const date = yesterday();
+  const requested = yesterday();
+  const date = editionExists(requested) ? requested : latestEdition();
 
-  if (!editionExists(date)) {
+  if (!date) {
     return (
-      <html {...pageAttrs({ prefs, status: 404, cacheControl: "no-cache" })}>
-        <Shell title="Yesterday is not ready" prefs={prefs} path="/">
-          <NotFoundView message={`The edition for yesterday (${date}) is not available yet. Check back shortly.`} />
+      <html {...pageAttrs({ prefs, cacheControl: "no-cache" })}>
+        <Shell title="No editions yet" prefs={prefs} path="/">
+          <h1 class="page-title">No editions yet</h1>
+          <p class="empty">The first edition is being prepared. Check back after the next hourly update.</p>
         </Shell>
       </html>
     );
@@ -44,6 +42,7 @@ export default defineHandler((event) => {
           today={today()}
           stories={stories}
           save={estimateEditionSave(date)}
+          subtitle={date === requested ? undefined : `Latest available edition: ${longDate(date)}. The edition for ${longDate(requested)} is being prepared.`}
         />
       </Shell>
     </html>

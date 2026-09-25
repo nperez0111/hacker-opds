@@ -33,7 +33,10 @@ file, on a device with no notifications, that you can read outside.
 - **Publishes** the result as an OPDS 1.2 catalogue, RSS feeds with full article
   bodies, and a website designed for e-ink.
 
-Editions are immutable once built and kept for 90 days.
+The previous day's edition is published at local midnight. Its ranking is a
+stable snapshot, marked provisional for the configured lag and then finalized
+without replacing stories or EPUBs. If ingestion is delayed, the homepage shows
+the latest available edition with its actual date. Editions are kept for 90 days.
 
 ## Screenshots
 
@@ -204,7 +207,7 @@ truth; everything below can be overridden.
 | Variable | Default | |
 |---|---|---|
 | `EDITION_TZ` | `Europe/Amsterdam` | The zone a "day" is measured in |
-| `EDITION_LAG_HOURS` | `6` | How long after midnight an edition closes |
+| `EDITION_LAG_HOURS` | `6` | When the midnight snapshot is marked final |
 | `EDITION_STORY_LIMIT` | `30` | Stories per edition |
 | `RETENTION_DAYS` | `90` | How long editions are kept |
 

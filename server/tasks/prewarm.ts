@@ -5,7 +5,7 @@ import { reapStaleBuilds } from "~/build/artifacts";
 import { buildEditionEpub, editionsNeedingDigest } from "~/build/edition";
 import { buildStoryEpub, storiesNeedingBuild } from "~/build/story";
 import { config } from "~/config";
-import { dueEditions, getEditionStories, ingestEdition } from "~/core/edition";
+import { dueEditions, finalizeDueEditions, getEditionStories, ingestEdition } from "~/core/edition";
 import { HnThrottled } from "~/core/hn-html";
 import { errFields, log } from "~/log";
 
@@ -64,6 +64,7 @@ export default defineTask({
     }
 
     const due = dueEditions();
+    const finalized = finalizeDueEditions();
 
     const ingested: string[] = [];
     let built = 0;
@@ -120,7 +121,14 @@ export default defineTask({
       // having -- it is what makes the day appear in the catalog at all, and
       // the sweep will build its stories on a later run. `buildOne` below is
       // what stops once parked.
-      const rows = await ingestEdition(date);
+      let rows;
+      try {
+        rows = await ingestEdition(date);
+      } catch (err) {
+        failed += 1;
+        log("prewarm").error({ date, ...errFields(err) }, `ingestion failed for ${date}; retrying next hour`);
+        continue;
+      }
       ingested.push(date);
       log("prewarm").info({ date, stories: rows.length }, `ingested ${date}`);
 
@@ -178,6 +186,6 @@ export default defineTask({
       }
     }
 
-    return { result: { ingested, built, failed, deferred, digests } };
+    return { result: { ingested, finalized, built, failed, deferred, digests } };
   },
 });

@@ -24,7 +24,7 @@ mock.module("~/core/algolia", () => ({
 // in coverage -- it catches any egress, not just one function.
 const realFetch = globalThis.fetch;
 
-const { ingestEdition, getEditionStories } = await import("~/core/edition");
+const { ingestEdition, getEditionStories, dueEditions, finalizeDueEditions, dayWindow } = await import("~/core/edition");
 const { saveArticle, getArticle } = await import("~/core/extract");
 const { saveComments, getComments } = await import("~/core/comments");
 const { getDb, resetDbForTests } = await import("~/db/client");
@@ -68,6 +68,26 @@ afterEach(() => {
 });
 
 describe("ingestEdition re-ingest", () => {
+  test("publishes at Amsterdam midnight, then finalizes the same snapshot after six hours", async () => {
+    const realNow = Date.now;
+    const midnight = dayWindow("2026-10-25", "Europe/Amsterdam").endUnix * 1000;
+    try {
+      Date.now = () => midnight - 1000;
+      expect(dueEditions()).not.toContain("2026-10-25");
+      Date.now = () => midnight;
+      expect(dueEditions()).toContain("2026-10-25");
+      hits = [hit(1001)];
+      await ingestEdition("2026-10-25");
+      expect(getDb().query<{ state: string }, [string]>("SELECT state FROM editions WHERE date = ?").get("2026-10-25")?.state).toBe("provisional");
+      expect(dueEditions()).not.toContain("2026-10-25");
+      Date.now = () => midnight + 6 * 3600 * 1000;
+      expect(finalizeDueEditions()).toContain("2026-10-25");
+      expect(getDb().query<{ state: string }, [string]>("SELECT state FROM editions WHERE date = ?").get("2026-10-25")?.state).toBe("ingested");
+      expect(getEditionStories("2026-10-25").map((s) => s.id)).toEqual([1001]);
+    } finally {
+      Date.now = realNow;
+    }
+  });
   test("keeps a surviving story's article and comments", async () => {
     hits = [hit(1001), hit(1002)];
     await ingestEdition(DATE);

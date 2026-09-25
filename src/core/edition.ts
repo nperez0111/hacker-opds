@@ -29,9 +29,14 @@ export function dayWindow(date: string, tz = config().editionTz): DayWindow {
   };
 }
 
-/** Unix seconds at which an edition becomes eligible to build. */
+/** Unix seconds at which the initial edition becomes eligible to publish. */
+export function opensAt(date: string, tz = config().editionTz): number {
+  return dayWindow(date, tz).endUnix;
+}
+
+/** Unix seconds at which the initial snapshot is considered final. */
 export function closesAt(date: string, tz = config().editionTz): number {
-  return dayWindow(date, tz).endUnix + config().editionLagHours * 3600;
+  return opensAt(date, tz) + config().editionLagHours * 3600;
 }
 
 export function today(tz = config().editionTz): string {
@@ -50,7 +55,7 @@ export function yesterday(tz = config().editionTz): string {
 }
 
 /**
- * Editions whose window has closed (day end + lag) but which have not been
+ * Editions whose calendar day has ended but which have not been
  * ingested yet, oldest first. Self-determining so the hourly task is
  * idempotent, DST-safe, and catches up after downtime.
  */
@@ -62,7 +67,7 @@ export function dueEditions(maxLookbackDays = 7): string[] {
 
   for (let i = 1; i <= maxLookbackDays; i++) {
     const date = shiftDate(today(c.editionTz), -i, c.editionTz);
-    if (closesAt(date, c.editionTz) > now) continue;
+    if (opensAt(date, c.editionTz) > now) continue;
     const row = db
       .query<{ state: string }, [string]>(
         "SELECT state FROM editions WHERE date = ?",
@@ -153,11 +158,11 @@ export async function ingestEdition(date: string): Promise<StoryRow[]> {
   tx(() => {
     db.query(
       `INSERT INTO editions (date, tz, start_unix, end_unix, closed_at, ingested_at, story_count, state)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'ingested')
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(date) DO UPDATE SET
          tz=excluded.tz, start_unix=excluded.start_unix, end_unix=excluded.end_unix,
          closed_at=excluded.closed_at, ingested_at=excluded.ingested_at,
-         story_count=excluded.story_count, state='ingested'`,
+         story_count=excluded.story_count, state=excluded.state`,
     ).run(
       win.date,
       c.editionTz,
@@ -166,6 +171,7 @@ export async function ingestEdition(date: string): Promise<StoryRow[]> {
       closesAt(win.date, c.editionTz),
       Math.floor(Date.now() / 1000),
       rows.length,
+      Math.floor(Date.now() / 1000) >= closesAt(win.date, c.editionTz) ? "ingested" : "provisional",
     );
 
     // Only drop stories that fell out of the new top-N. Deleting the whole
@@ -248,6 +254,21 @@ export async function ingestEdition(date: string): Promise<StoryRow[]> {
   );
 
   return rows;
+}
+
+/** Finalize a stable snapshot after the configured lag, without changing its books. */
+export function finalizeDueEditions(): string[] {
+  const c = config();
+  const db = getDb();
+  const dates = db.query<{ date: string }, []>(
+    "SELECT date FROM editions WHERE state = 'provisional' ORDER BY date",
+  ).all().map((row) => row.date);
+  const now = Math.floor(Date.now() / 1000);
+  const due = dates.filter((date) => closesAt(date, c.editionTz) <= now);
+  for (const date of due) {
+    db.query("UPDATE editions SET state = 'ingested' WHERE date = ? AND state = 'provisional'").run(date);
+  }
+  return due;
 }
 
 /**
