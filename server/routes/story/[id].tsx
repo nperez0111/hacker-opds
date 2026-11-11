@@ -1,5 +1,7 @@
 import { defineHandler } from "nitro/h3";
 import { config } from "~/config";
+import { ensureComments } from "~/build/story";
+import { errFields, log } from "~/log";
 import { getComments, groupThreads } from "~/core/comments";
 import { getStory } from "~/core/edition";
 import { getArticle } from "~/core/extract";
@@ -21,7 +23,7 @@ import { StoryView, NotFoundView } from "~/web/views";
  * gone quiet. Serving a slightly stale comment count is a fair trade for a page
  * that opens instantly from a service worker cache on a device with no radio.
  */
-export default defineHandler((event) => {
+export default defineHandler(async (event) => {
   const prefs = readPreferences(event);
   const raw = event.context.params?.id ?? "";
   const id = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
@@ -38,7 +40,16 @@ export default defineHandler((event) => {
   }
 
   const article = getArticle(story.id);
-  const threads = groupThreads(getComments(story.id));
+  let comments = getComments(story.id);
+  if (comments.length > 0 && comments.every((comment) => comment.author == null)) {
+    try {
+      comments = await ensureComments(story, 0);
+    } catch (error) {
+      // Keep serving the cached discussion if HN is unavailable or throttled.
+      log("web").warn({ storyId: story.id, ...errFields(error) }, "comment author repair deferred");
+    }
+  }
+  const threads = groupThreads(comments);
   // Drawn from the extracted article rather than written by hand, so it
   // describes what the page actually contains. Omitted when extraction failed,
   // rather than padded out with the story title a second time.
@@ -46,7 +57,7 @@ export default defineHandler((event) => {
     article && article.xhtml ? snippet(article.xhtml, 180) : undefined;
 
   return (
-    <html {...pageAttrs({ prefs, cacheControl: "public, max-age=86400" })}>
+    <html {...pageAttrs({ prefs, cacheControl: comments.length > 0 && comments.every((comment) => comment.author == null) ? "no-store" : "public, max-age=86400" })}>
       <Shell
         title={story.title}
         prefs={prefs}

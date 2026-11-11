@@ -46,6 +46,16 @@ describe("parseAge", () => {
 describe("parseRows", () => {
   const rows = parseRows(HTML);
 
+  test("keeps authors when HN omits the hnuser class", () => {
+    const updated = HTML.replace(/class="hnuser"/g, "");
+    expect(parseRows(updated).map((row) => row.author)).toEqual(rows.map((row) => row.author));
+  });
+
+  test("does not mistake a profile link in the body for the author", () => {
+    const html = '<table><tr class="athing comtr" id="10"><td><span class="comhead"><span class="age"></span></span><div class="commtext"><a href="user?id=someone">someone</a></div></td></tr></table>';
+    expect(parseRows(html)[0]?.author).toBeNull();
+  });
+
   test("includes noshow and coll rows", () => {
     // 58 total rows; only 24 carry the bare class.
     expect(rows.length).toBe(58);

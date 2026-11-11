@@ -176,7 +176,10 @@ export function parseRows(html: string): ParsedRow[] {
     );
 
     const body = row.querySelector("div.commtext");
-    const author = row.querySelector("a.hnuser")?.textContent?.trim() || null;
+    // HN no longer consistently gives profile links the `hnuser` class.
+    // Scope to the header so a user link quoted in the body cannot become
+    // the author of a deleted/anonymous comment.
+    const author = row.querySelector('.comhead a[href^="user?id="]')?.textContent?.trim() || null;
     const created = parseAge(row.querySelector("span.age")?.getAttribute("title"));
 
     rows.push({

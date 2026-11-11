@@ -79,7 +79,10 @@ export function seriesIndex(editionDate: string, rank: number): string {
  */
 export async function ensureComments(story: StoryRow, maxWaitMs?: number) {
   const cached = getComments(story.id);
-  if (cached.length > 0) return cached;
+  // The old hnuser selector cached entire discussions without authors after
+  // HN dropped that class. Refetch those trees, but retain genuinely anonymous
+  // individual comments in otherwise healthy discussions.
+  if (cached.some((comment) => comment.author != null)) return cached;
   // A story really can have zero comments; skip the round trip in that case.
   if (story.num_comments <= 0) return cached;
 
