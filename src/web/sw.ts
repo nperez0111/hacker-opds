@@ -16,6 +16,7 @@
  *     here, with no transpiler in between, means what is tested is what runs.
  */
 import { manifestIcons } from "~/web/icons";
+import { READER_JS } from "~/web/reader";
 import {
   CACHED_AT_HEADER,
   CACHED_BYTES_HEADER,
@@ -72,7 +73,7 @@ var SWEEP_MARK = ${JSON.stringify(SWEEP_MARK_URL)};
  * Entries no rule may ever evict: the precache list, plus the sweep's own
  * bookkeeping entry.
  *
- * PRECACHE is the app shell - "/", "/offline", the stylesheet and the script.
+ * PRECACHE is the app shell - "/", "/offline", "/saved", stylesheet and script.
  * Ageing those out is the one way this feature could make the site worse than
  * it was: install is the only thing that puts them back, install only runs on
  * a worker update, and a reader whose shell expired while they were out of
@@ -419,13 +420,21 @@ function put(request, response) {
     .open(CACHE)
     .then(function (cache) {
       return stamped(copy, Date.now()).then(function (entry) {
-        return cache.put(request, entry);
+        return cache.put(request, entry).then(function () {
+          return notifyCacheChanged();
+        });
       });
     })
     /* One more link in this chain than there used to be, and a rejected
      * cache.put is an unhandled rejection in the worker's console. */
     .catch(function () {});
   return response;
+}
+
+function notifyCacheChanged() {
+  return self.clients.matchAll().then(function (clients) {
+    for (var i = 0; i < clients.length; i++) clients[i].postMessage({ type: "cache-updated" });
+  });
 }
 
 function cacheFirst(request) {
@@ -706,7 +715,7 @@ self.addEventListener("message", function (event) {
            * reader is told the save finished without waiting on the sweep.
            */
           swept = true;
-          return sweep(Date.now()).catch(function () {});
+          return sweep(Date.now()).then(notifyCacheChanged).catch(function () {});
         }
         var url = urls[i];
         return cache
@@ -743,10 +752,10 @@ self.addEventListener("message", function (event) {
  * never appears, no marker is revealed, the comment tree still collapses
  * natively, and every page still renders and navigates.
  *
- * Two independent IIFEs rather than one. The first returns immediately on a
- * browser without service workers, and the scroll correction must not be
- * behind that gate - an old reader with no worker support is exactly the device
- * that most needs its place kept.
+ * Independent IIFEs keep scroll correction and local reading state outside
+ * the worker feature gate: an old reader without workers should still keep
+ * its place. READER_JS is appended after the offline shim so its dynamic queue
+ * can notify the already-wired cache scanner.
  */
 export const APP_JS = `/* hacker-opds */
 "use strict";
@@ -1087,6 +1096,14 @@ export const APP_JS = `/* hacker-opds */
    */
   function scan() {
     if (!window.caches || !document.querySelectorAll) return;
+    var statuses = document.querySelectorAll("[data-offline-status]");
+    for (var s = 0; s < statuses.length; s++) {
+      (function (node) {
+        isSaved(node.getAttribute("data-offline-status")).then(function (hit) {
+          node.textContent = hit ? "Available offline on this device" : "Not saved offline";
+        });
+      })(statuses[s]);
+    }
     var nodes = document.querySelectorAll("[data-saved-mark]");
     if (!nodes.length) return;
 
@@ -1100,7 +1117,7 @@ export const APP_JS = `/* hacker-opds */
         if (hit) {
           reveal(nodes[i]);
           saved += 1;
-        }
+        } else nodes[i].setAttribute("hidden", "");
         next(i + 1);
       });
     }
@@ -1238,6 +1255,16 @@ export const APP_JS = `/* hacker-opds */
   function wire() {
     scan();
     wirePull();
+    document.addEventListener("reader-updated", scan);
+    if (window.addEventListener) {
+      window.addEventListener("pageshow", scan);
+      window.addEventListener("focus", scan);
+    }
+    navigator.serviceWorker.addEventListener("controllerchange", scan);
+    navigator.serviceWorker.addEventListener("message", function (event) {
+      var data = event.data || {};
+      if (data.type === "cache-updated" || data.type === "cache-purged" || data.type === "save-progress") scan();
+    });
 
     var button = document.querySelector("[data-save-edition]");
     if (!button) return;
@@ -1294,6 +1321,7 @@ export const APP_JS = `/* hacker-opds */
     wire();
   }
 })();
+${READER_JS}
 `;
 
 /** Web app manifest. Small, and deliberately monochrome. */

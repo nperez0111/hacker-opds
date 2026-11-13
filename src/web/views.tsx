@@ -80,6 +80,20 @@ function SavedMark(props: { href: string }) {
   );
 }
 
+/** Local-only controls stay hidden when storage or JavaScript is unavailable. */
+function ReaderActions(props: { id: number; title: string }) {
+  return (
+    <div class="reader-actions" data-reader-story={props.id} data-reader-title={props.title} hidden>
+      <button class="btn" type="button" data-reader-save>Save for later</button>
+      <button class="btn" type="button" data-reader-read>Mark read</button>
+    </div>
+  );
+}
+
+function ReaderStatus() {
+  return <p class="meta" data-reader-status role="status" aria-live="polite"></p>;
+}
+
 /**
  * One row of the story list.
  *
@@ -98,7 +112,7 @@ function StoryRowItem(props: { story: StoryListRow; index: number }) {
   const { story, index } = props;
   const href = `/story/${story.id}`;
   return (
-    <li>
+    <li data-reader-row={story.id}>
       <a class="story-link" href={href}>
         <span class="rank">{index + 1}</span>
         <span class="story-body">
@@ -106,9 +120,11 @@ function StoryRowItem(props: { story: StoryListRow; index: number }) {
           <span class="story-meta">
             {storyMetaParts(story, story.word_count).join(DOT)}
           </span>
+          <span class="story-meta" data-reader-state={story.id} hidden></span>
         </span>
         <SavedMark href={href} />
       </a>
+      <ReaderActions id={story.id} title={story.title} />
     </li>
   );
 }
@@ -146,6 +162,7 @@ export function EditionView(props: EditionViewProps) {
       <p class="meta">
         {plural(stories.length, "story", "stories")}
       </p>
+      <ReaderStatus />
 
       {stories.length === 0 ? (
         <p class="empty">This edition has no stories yet.</p>
@@ -261,10 +278,13 @@ export function StoryView(props: StoryViewProps) {
       {/* The id is the target of "Back to top" at the foot of the discussion.
           The page shell belongs to another module, so the story page anchors
           its own top rather than assuming one exists further out. */}
-      <header class="story-head" id="top">
+      <header class="story-head" id="top" data-reading-story={story.id}>
         <h1 class="page-title">{story.title}</h1>
         {byline.length > 0 ? <p class="page-sub">{byline.join(DOT)}</p> : null}
         <p class="meta">{facts.join(DOT)}</p>
+        <p class="meta" data-reader-state={story.id} hidden></p>
+        <ReaderActions id={story.id} title={story.title} />
+        <ReaderStatus />
         {/*
           The same marker as on the list, spelled out. There is room for words
           here and no legend nearby, so the glyph gets its meaning printed
@@ -276,6 +296,13 @@ export function StoryView(props: StoryViewProps) {
             {SAVED_GLYPH}
           </span>{" "}
           {SAVED_LABEL}
+        </p>
+        <p class="meta" data-offline-status={`/story/${story.id}`} data-offline-ui hidden role="status"></p>
+        <p class="actions" data-offline-ui hidden>
+          <button class="btn" type="button" data-save-edition={JSON.stringify([`/story/${story.id}`])}>
+            Save this story offline
+          </button>
+          <span class="meta" data-save-status role="status" aria-live="polite"></span>
         </p>
         <p class="actions">
           <a class="btn btn-primary" href={`/epub/story/${story.id}.epub`}>
@@ -313,6 +340,7 @@ export function StoryView(props: StoryViewProps) {
             Back to top
           </a>
         </p>
+        <ReaderActions id={story.id} title={story.title} />
       </section>
 
       {/*
@@ -425,6 +453,7 @@ export function SearchView(props: SearchViewProps) {
   return (
     <>
       <h1 class="page-title">Search</h1>
+      <ReaderStatus />
 
       {/*
        * A plain GET form, and nothing else.
@@ -482,10 +511,11 @@ export function SearchView(props: SearchViewProps) {
 
           <ol class="stories">
             {hits.map((hit) => (
-              <li>
+              <li data-reader-row={hit.id}>
                 <a class="story-link" href={`/story/${hit.id}`}>
                   <span class="story-body">
                     <span class="story-title">{hit.title}</span>
+                    <span class="story-meta" data-reader-state={hit.id} hidden></span>
                     <span class="story-meta">
                       {[
                         ...storyMetaParts(
@@ -515,6 +545,7 @@ export function SearchView(props: SearchViewProps) {
                       is worse than no glyph. */}
                   <SavedMark href={`/story/${hit.id}`} />
                 </a>
+                <ReaderActions id={hit.id} title={hit.title} />
               </li>
             ))}
           </ol>
@@ -535,6 +566,26 @@ export function SearchView(props: SearchViewProps) {
           ) : null}
         </>
       )}
+    </>
+  );
+}
+
+export function SavedView() {
+  return (
+    <>
+      <h1 class="page-title">Saved for later</h1>
+      <p class="page-sub">Your reading queue on this device.</p>
+      <p class="offline-note">
+        Saving for later bookmarks a story; it does not download it. Offline
+        availability is shown separately. Reading position and read/unread are
+        stored in this browser, not synced. Clearing browser data removes them.
+        Stories may leave the server archive when its retention period expires.
+      </p>
+      <noscript><p>Enable JavaScript to use your saved stories.</p></noscript>
+      <p class="empty" data-reader-unavailable hidden>Browser storage is unavailable. Saved stories cannot be loaded.</p>
+      <ReaderStatus />
+      <p class="empty" data-reader-empty hidden>No saved stories yet. Choose “Save for later” on a story.</p>
+      <ul class="stories" data-reader-library></ul>
     </>
   );
 }

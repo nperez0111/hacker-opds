@@ -46,18 +46,19 @@ const CSS_TOKEN = token(SITE_CSS);
 const APP_TOKEN = token(APP_JS);
 
 /**
- * Precache list, and the reason it is exactly these four entries.
+ * Precache list: the shell, fallback, saved queue and two required assets.
  *
  * install blocks on this, and a worker that fails to install is a worker that
  * never runs, so the list holds only what is needed to render *something*
  * useful with the network gone: the two assets every page links, the front
- * page, and the fallback shown for a page that was never visited. Story pages
+ * page, the device-local saved queue, and the fallback for an unvisited page. Story pages
  * arrive through runtime caching as they are read, or in bulk via the save
  * button.
  */
 const PRECACHE = [
   "/",
   "/offline",
+  "/saved",
   `/assets/site.css?v=${CSS_TOKEN}`,
   `/assets/app.js?v=${APP_TOKEN}`,
 ];

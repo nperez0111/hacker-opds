@@ -33,6 +33,7 @@ import assetRoute from "../server/routes/assets/[file]";
 import faviconRoute from "../server/routes/favicon.ico";
 import themeRoute from "../server/routes/theme";
 import offlineRoute from "../server/routes/offline";
+import savedRoute from "../server/routes/saved";
 import indexRoute from "../server/routes/index";
 import archiveIndexRoute from "../server/routes/archive/index";
 import archiveDateRoute from "../server/routes/archive/[date]";
@@ -358,6 +359,20 @@ describe("GET /favicon.ico", () => {
     );
     expect(res.status).toBe(200);
     expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
+  });
+});
+
+describe("GET /saved", () => {
+  test("serves a cacheable, device-local queue shell without querying the network", async () => {
+    const res = await call(savedRoute, event("/saved", { cookie: "theme=dark" }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("public, max-age=86400");
+    const body = await res.text();
+    expect(body).toContain('data-theme="dark"');
+    expect(body).toContain("data-reader-library");
+    expect(body).toContain('href="/saved" aria-current="page"');
+    expect(body).toContain("it does not download it");
+    expect(body).toContain("Enable JavaScript");
   });
 });
 

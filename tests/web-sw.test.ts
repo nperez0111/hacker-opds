@@ -1687,9 +1687,10 @@ describe("APP_JS - scroll correction, as written", () => {
     // the scroll half: the pull gesture is allowed its preventDefault, but only
     // on touchmove, and only while the indicator is being dragged.
     expect(SCROLL_CODE).not.toContain("preventDefault");
-    expect(APP_CODE).not.toMatch(/\.open\s*=[^=]/);
-    expect(APP_CODE).not.toContain('setAttribute("open"');
-    expect(APP_CODE).not.toContain('removeAttribute("open"');
+    // The separate reading-state enhancement restores saved collapsed threads.
+    expect(SCROLL_CODE).not.toMatch(/\.open\s*=[^=]/);
+    expect(SCROLL_CODE).not.toContain('setAttribute("open"');
+    expect(SCROLL_CODE).not.toContain('removeAttribute("open"');
   });
 });
 
@@ -2200,7 +2201,7 @@ describe("APP_JS - pull to refresh, executed", () => {
     // half must add none of its three touch handlers on top of it.
     const p = pullPage({ touch: false });
 
-    expect(Object.keys(p.handlers)).toEqual(["click"]);
+    expect(Object.keys(p.handlers)).toEqual(["click", "reader-updated"]);
   });
 
   test("purges the cache after a full pull, and shows it working", async () => {

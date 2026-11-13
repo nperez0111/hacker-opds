@@ -28,7 +28,7 @@
  * hitting the origin again.
  */
 import pLimit from "p-limit";
-import { Resvg, type ResvgRenderOptions } from "@resvg/resvg-js";
+import type { ResvgRenderOptions } from "@resvg/resvg-js";
 
 import { config, userAgent } from "~/config";
 import { isAllowed } from "~/core/fetcher";
@@ -36,6 +36,7 @@ import { log } from "~/log";
 import { assetVariant, linkStoryAssets, lookupAsset, putAsset } from "~/epub/assets";
 import type { AssetBytes } from "~/epub/assets";
 import type { EpubResource } from "~/epub/package";
+import { rasterizeSvg } from "~/epub/svg";
 
 /** Cap per book. Pathological pages (image galleries) would otherwise stall a build. */
 const MAX_IMAGES = 60;
@@ -117,13 +118,11 @@ export async function processImage(input: Uint8Array, contentType: string): Prom
 
   if (/svg/i.test(contentType)) {
     const svg = new TextDecoder().decode(input);
-    raw = new Resvg(svg, {
+    raw = await rasterizeSvg(svg, {
       fitTo: { mode: "width", value: cfg.imageMaxWidth },
       background: "white",
       font: svgFontOptions,
-    })
-      .render()
-      .asPng();
+    });
   }
 
   const shrink = () =>

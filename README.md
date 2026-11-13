@@ -173,6 +173,7 @@ bun run start
 | `/archive/{date}` | One edition |
 | `/story/{id}` | Article and full comment tree |
 | `/search?q=` | Full-text search over titles and article bodies |
+| `/saved` | Device-local save-for-later queue with offline availability |
 | `/settings` | Reading font and theme |
 | `/offline` | Service worker fallback |
 
@@ -379,6 +380,16 @@ server-side — a client-side toggle would need scripting and would cause a full
 white-to-black panel flash on e-ink. The service worker, the scroll-position
 correction and the "save edition offline" button are all additive: turn scripting
 off and you lose caching, not access.
+
+**Reading state stays on your device.** With JavaScript and browser storage
+enabled, story pages resume your reading position (including collapsed comment
+threads). Fragment links and browser Back navigation take priority over resume.
+Use **Save for later** to bookmark a story in **Saved**, and **Mark read / Mark
+unread** to manage its status; opening a story does not silently mark it read.
+These controls work on edition and search lists too. Bookmarks do not download
+pages: **Save this story offline** does that, and offline availability is checked
+against the actual page cache. Downloads remain subject to the 30-day / 64 MB
+cache limits. State is not synced; clearing browser data removes it.
 
 **`robots.txt` disallows everything.** This republishes other people's writing
 for one reader on one device. Letting it be crawled into a search index or a

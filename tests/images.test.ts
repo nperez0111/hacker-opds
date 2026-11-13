@@ -319,6 +319,19 @@ describe("embedImages", () => {
     expect(result.xhtml).toContain(result.resources[0]!.href);
   });
 
+  test("drops a failed SVG subprocess while keeping the book and other images", async () => {
+    stubFetch({
+      "https://a.example/bad.svg": { body: new TextEncoder().encode("invalid SVG"), type: "image/svg+xml" },
+      "https://a.example/ok.png": { body: await samplePng(), type: "image/png" },
+    });
+    const result = await embedImages('<p>Article text</p><img src="https://a.example/bad.svg"/><img src="https://a.example/ok.png"/>');
+    expect(result.failed).toBe(1);
+    expect(result.embedded).toBe(1);
+    expect(result.xhtml).toContain("Article text");
+    expect(result.xhtml).not.toContain("bad.svg");
+    expect(result.xhtml).toContain(result.resources[0]!.href);
+  });
+
   test("rasterises a remote SVG into the book", async () => {
     stubFetch({
       "https://a.example/diagram.svg": {

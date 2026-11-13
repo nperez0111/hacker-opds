@@ -70,6 +70,7 @@ export const SOURCE_URL = "https://github.com/nperez0111/hacker-opds";
 const NAV = [
   { href: "/", label: "Today" },
   { href: "/archive", label: "Archive" },
+  { href: "/saved", label: "Saved" },
   { href: "/search", label: "Search" },
   { href: "/opds", label: "OPDS" },
 ] as const;
@@ -321,6 +322,7 @@ export function Shell(props: ShellProps) {
                */}
               <a href={`#${SETTINGS_ID}`}>Settings</a>
             </nav>
+            <p class="meta" data-connection-status hidden role="status" aria-live="polite"></p>
           </header>
 
           <main id="main">{props.children}</main>

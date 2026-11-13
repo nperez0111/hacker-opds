@@ -199,8 +199,8 @@ describe("asset URLs", () => {
 });
 
 describe("PRECACHE_URLS", () => {
-  test("is exactly the four entries install can afford to block on", () => {
-    expect(PRECACHE_URLS).toEqual(["/", "/offline", CSS_URL, APP_JS_URL]);
+  test("includes the saved queue shell so it opens offline before a first visit", () => {
+    expect(PRECACHE_URLS).toEqual(["/", "/offline", "/saved", CSS_URL, APP_JS_URL]);
   });
 
   /**

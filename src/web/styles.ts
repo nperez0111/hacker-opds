@@ -33,6 +33,20 @@ import { TYPE_CSS } from "~/web/type";
 
 export const SITE_CSS = `@charset "utf-8";
 
+/* Reading state is plain text, not a faint visited colour on e-ink. */
+.reader-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0 1rem;
+}
+.reader-actions[hidden], [data-reader-state][hidden],
+[data-reader-empty][hidden], [data-reader-unavailable][hidden] {
+  display: none;
+}
+[data-reader-status]:empty { display: none; }
+[data-reader-library] { list-style: none; padding-left: 0; }
+
 /* ------------------------------------------------------------------ */
 /* theme                                                               */
 /* ------------------------------------------------------------------ */
